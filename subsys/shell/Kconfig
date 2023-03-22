@@ -251,6 +251,14 @@ config SHELL_AUTOSTART
 	help
 	  If enabled, shell will be automatically started.
 
+config SHELL_CMDS_RETURN_VALUE
+	bool "Command to retrieve return value of most recent command"
+	depends on SHELL_CMDS
+	default y
+	help
+		Enables a command to retrieve the return value from the previously executed command.
+		Enabled by default.
+
 source "subsys/shell/modules/Kconfig"
 
 endif # SHELL

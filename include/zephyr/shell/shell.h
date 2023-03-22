@@ -822,6 +822,9 @@ struct shell_ctx {
 
 	struct k_mutex wr_mtx;
 	k_tid_t tid;
+
+	/* Store result of previously executed command */
+	int ret_val;
 };
 
 extern const struct log_backend_api log_backend_shell_api;
@@ -1237,6 +1240,15 @@ int shell_obscure_set(const struct shell *sh, bool obscure);
  * @retval -EINVAL if shell is NULL.
  */
 int shell_mode_delete_set(const struct shell *sh, bool val);
+
+/**
+ * @brief Retrieve return value of most recently executed shell command.
+ *
+ * @param[in] shell Pointer to the shell instance
+ *
+ * @retval return value of previous command
+ */
+int shell_get_return_value(const struct shell *shell);
 
 /**
  * @}

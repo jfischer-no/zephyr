@@ -1001,7 +1001,7 @@ static void state_collect(const struct shell *sh)
 					z_cursor_next_line_move(sh);
 				} else {
 					/* Command execution */
-					(void)execute(sh);
+					sh->ctx->ret_val = execute(sh);
 				}
 				/* Function responsible for printing prompt
 				 * on received NL.
@@ -1118,7 +1118,6 @@ static void state_collect(const struct shell *sh)
 				__fallthrough;
 			case 'L': {/* INSERT Button in VT100 mode */
 				bool status = z_flag_insert_mode_get(sh);
-
 				z_flag_insert_mode_set(sh, !status);
 				break;
 			}
@@ -1695,6 +1694,15 @@ int shell_mode_delete_set(const struct shell *sh, bool val)
 	}
 
 	return (int)z_flag_mode_delete_set(sh, val);
+}
+
+int shell_get_return_value(const struct shell *sh)
+{
+	if (sh == NULL) {
+		return -EINVAL;
+	}
+
+	return z_shell_get_return_value(sh);
 }
 
 void shell_set_bypass(const struct shell *sh, shell_bypass_cb_t bypass)

@@ -244,6 +244,11 @@ static inline void z_cursor_next_line_move(const struct shell *sh)
 	z_shell_raw_fprintf(sh->fprintf_ctx, "\n");
 }
 
+static inline int z_shell_get_return_value(const struct shell *sh)
+{
+	return sh->ctx->ret_val;
+}
+
 void z_shell_op_cursor_vert_move(const struct shell *sh, int32_t delta);
 
 void z_shell_op_cursor_horiz_move(const struct shell *sh, int32_t delta);

@@ -14,6 +14,7 @@
 #define HELP_NONE      "[none]"
 #define HELP_DATE_SET  "[Y-m-d] <H:M:S>"
 
+
 static void date_print(const struct shell *sh, struct tm *t)
 {
 	shell_print(sh,
