@@ -21,14 +21,11 @@ properties:
       emulated write block size of the flash. If this value is set to 0 the
       disk-sector-size will be used as write block size.
     default: 0
-  disk-name:
-    type: string
-    description: the name of the underlying disk to be used
+  disk:
+    type: phandle
     required: true
-  disk-sector-size:
-    type: int
-    description: the sector size in byte of the underlying disk to be used
-    required: true
+    description: |
+      Phandle to the disk device to be used as storage medium for the emulated flash.
   disk-offset:
     type: int
     description: >

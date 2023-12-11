@@ -304,7 +304,7 @@ init_done:
 	BUILD_ASSERT(DT_INST_PROP(index, size) > 0, "flash_size needs to be > 0");		\
 	BUILD_ASSERT(DT_INST_PROP(index, page_size) > 0, "page_size needs to be > 0");		\
 	BUILD_ASSERT(DT_INST_PROP(index, disk_offset) >= 0, "disk_offset needs to be >= 0");	\
-	uint8_t sector_buf_##index[DT_INST_PROP(index, disk_sector_size)];			\
+	uint8_t sector_buf_##index[DT_INST_PROP_BY_PHANDLE(index, disk, sector_size)];		\
 	static struct disk_flash_data disk_flash_data_##index = {				\
 		.sector_buf = sector_buf_##index,						\
 		.sector_buf_size = sizeof(sector_buf_##index),					\
@@ -315,7 +315,7 @@ init_done:
 		{										\
 			.write_block_size =							\
 				COND_CODE_0(DT_INST_PROP(index, write_block_size),		\
-					(DT_INST_PROP(index, disk_sector_size)),		\
+					(DT_PROP(DT_INST_PHANDLE(index, disk), sector_size)),	\
 					(DT_INST_PROP(index, write_block_size))),		\
 			.erase_value = 0xFF							\
 		},										\
@@ -330,7 +330,7 @@ init_done:
 				},								\
 			)									\
 		)										\
-		.disk_name = DT_INST_PROP(index, disk_name),					\
+		.disk_name = DT_INST_PROP_BY_PHANDLE(index, disk, disk_name),			\
 		.disk_offset = DT_INST_PROP(index, disk_offset),				\
 	};											\
 	DEVICE_DT_INST_DEFINE(index, &disk_flash_init, NULL, &disk_flash_data_##index,		\

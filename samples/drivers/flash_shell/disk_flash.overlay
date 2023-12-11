@@ -5,7 +5,7 @@
  */
 
 / {
-	ramdisk0 {
+	ramdisk0: ramdisk0 {
 		compatible = "zephyr,ram-disk";
 		disk-name = "DISK0";
 		sector-size = <512>;
@@ -17,8 +17,7 @@
 		status = "okay";
 		size = <4096>;
 		page-size = <1024>;
-		disk-name = "DISK0";
-		disk-sector-size = <512>;
+		disk = <&ramdisk0>;
 		disk-offset = <512>;
 	};
 };
