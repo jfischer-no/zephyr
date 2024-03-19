@@ -34,7 +34,7 @@ int usbd_class_handle_xfer(struct usbd_contex *const uds_ctx,
  *
  * @return Length of the class descriptor
  */
-size_t usbd_class_desc_len(struct usbd_class_node *const c_nd,
+size_t usbd_class_desc_len(struct usbd_class_data *const c_nd,
 			   const enum usbd_speed speed);
 
 /**
