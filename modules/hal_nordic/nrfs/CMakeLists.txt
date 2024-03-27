@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 if(CONFIG_NRFS)
+    add_subdirectory(${ZEPHYR_CURRENT_MODULE_DIR}/nrfs nrfs)
+
     if(CONFIG_NRFS_LOCAL_DOMAIN)
         zephyr_sources_ifdef(CONFIG_NRFS_BACKEND_IPC_SERVICE_EXTENDED
                             backends/nrfs_backend_ipc_service.c)
