@@ -856,7 +856,6 @@ static const usb_device_controller_interface_struct_t udc_mcux_if = {
 	USB_DeviceEhciRecv, USB_DeviceEhciCancel, USB_DeviceEhciControl
 };
 
-#ifdef CONFIG_DT_HAS_NXP_USBPHY_ENABLED
 #define UDC_MCUX_PHY_DEFINE(n)								\
 static usb_phy_config_struct_t phy_config_##n = {					\
 	.D_CAL = DT_PROP_OR(DT_INST_PHANDLE(n, phy_handle), tx_d_cal, 0),		\
@@ -868,13 +867,9 @@ static usb_phy_config_struct_t phy_config_##n = {					\
 	COND_CODE_1(DT_NODE_HAS_PROP(DT_DRV_INST(n), phy_handle),			\
 		    (UDC_MCUX_PHY_DEFINE(n)), ())
 
-#define UDC_MCUX_PHY_CFG_PTR_OR_NULL(n)							\
-	.phy_config = COND_CODE_1(DT_NODE_HAS_PROP(DT_DRV_INST(n), phy_handle),		\
-		    (&phy_config_##n), (NULL))
-#else
-#define UDC_MCUX_PHY_DEFINE_OR(n)
-#define UDC_MCUX_PHY_CFG_PTR_OR_NULL(n)
-#endif
+#define UDC_MCUX_PHY_CFG_PTR_OR(n)							\
+	COND_CODE_1(DT_NODE_HAS_PROP(DT_DRV_INST(n), phy_handle),			\
+		    (.phy_config = &phy_config_##n,), ())
 
 #define USB_MCUX_EHCI_DEVICE_DEFINE(n)							\
 	UDC_MCUX_PHY_DEFINE_OR(n);							\
@@ -910,7 +905,7 @@ static usb_phy_config_struct_t phy_config_##n = {					\
 		.ep_cfg_out = ep_cfg_out##n,						\
 		.mcux_if = &udc_mcux_if,						\
 		.pincfg = PINCTRL_DT_INST_DEV_CONFIG_GET(n),				\
-		UDC_MCUX_PHY_CFG_PTR_OR_NULL(n),					\
+		UDC_MCUX_PHY_CFG_PTR_OR(n)						\
 	};										\
 											\
 	static struct udc_mcux_data priv_data_##n = {					\
