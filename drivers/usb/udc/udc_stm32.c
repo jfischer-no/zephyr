@@ -418,7 +418,7 @@ static int udc_stm32_ep_mem_config(const struct device *dev,
 	const struct udc_stm32_config *cfg = dev->config;
 	uint32_t size;
 
-	size = MIN(ep->mps, cfg->ep_mps);
+	size = MIN(udc_mps_ep_size(ep), cfg->ep_mps);
 
 	if (!enable) {
 		priv->occupied_mem -= size;
@@ -482,7 +482,7 @@ static int udc_stm32_ep_mem_config(const struct device *dev,
 		return 0;
 	}
 
-	words = MIN(ep->mps, cfg->ep_mps) / 4;
+	words = MIN(udc_mps_ep_size(ep), cfg->ep_mps) / 4;
 	words = (words <= 64) ? words * 2 : words;
 
 	if (!enable) {
@@ -663,7 +663,7 @@ static int udc_stm32_ep_enable(const struct device *dev,
 		return ret;
 	}
 
-	status = HAL_PCD_EP_Open(&priv->pcd, ep->addr, ep->mps,
+	status = HAL_PCD_EP_Open(&priv->pcd, ep->addr, udc_mps_ep_size(ep),
 				 eptype2hal(type));
 	if (status != HAL_OK) {
 		LOG_ERR("HAL_PCD_EP_Open failed(0x%02x), %d",
