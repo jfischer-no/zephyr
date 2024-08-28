@@ -1738,6 +1738,7 @@ static int udc_dwc2_init_controller(const struct device *dev)
 	mem_addr_t gahbcfg_reg = (mem_addr_t)&base->gahbcfg;
 	mem_addr_t gusbcfg_reg = (mem_addr_t)&base->gusbcfg;
 	mem_addr_t dcfg_reg = (mem_addr_t)&base->dcfg;
+	uint32_t hs_phy_spd;
 	uint32_t dcfg;
 	uint32_t gusbcfg;
 	uint32_t gahbcfg;
@@ -1849,6 +1850,13 @@ static int udc_dwc2_init_controller(const struct device *dev)
 
 	dcfg &= ~USB_DWC2_DCFG_DESCDMA;
 
+	if (IS_ENABLED(CONFIG_UDC_DRIVER_SUPPORTS_HIGH_SPEED)) {
+		hs_phy_spd = usb_dwc2_set_dcfg_devspd(USB_DWC2_DCFG_DEVSPD_USBHS20);
+	} else {
+		/* Limit the high-speed capable controller to full speed. */
+		hs_phy_spd = usb_dwc2_set_dcfg_devspd(USB_DWC2_DCFG_DEVSPD_USBFS20);
+	}
+
 	/* Configure PHY and device speed */
 	dcfg &= ~USB_DWC2_DCFG_DEVSPD_MASK;
 	switch (usb_dwc2_get_ghwcfg2_hsphytype(ghwcfg2)) {
@@ -1857,15 +1865,13 @@ static int udc_dwc2_init_controller(const struct device *dev)
 	case USB_DWC2_GHWCFG2_HSPHYTYPE_ULPI:
 		gusbcfg |= USB_DWC2_GUSBCFG_PHYSEL_USB20 |
 			   USB_DWC2_GUSBCFG_ULPI_UTMI_SEL_ULPI;
-		dcfg |= USB_DWC2_DCFG_DEVSPD_USBHS20
-			<< USB_DWC2_DCFG_DEVSPD_POS;
+		dcfg |= hs_phy_spd;
 		hs_phy = true;
 		break;
 	case USB_DWC2_GHWCFG2_HSPHYTYPE_UTMIPLUS:
 		gusbcfg |= USB_DWC2_GUSBCFG_PHYSEL_USB20 |
 			   USB_DWC2_GUSBCFG_ULPI_UTMI_SEL_UTMI;
-		dcfg |= USB_DWC2_DCFG_DEVSPD_USBHS20
-			<< USB_DWC2_DCFG_DEVSPD_POS;
+		dcfg |= hs_phy_spd;
 		hs_phy = true;
 		break;
 	case USB_DWC2_GHWCFG2_HSPHYTYPE_NO_HS:
@@ -1876,8 +1882,7 @@ static int udc_dwc2_init_controller(const struct device *dev)
 			gusbcfg |= USB_DWC2_GUSBCFG_PHYSEL_USB11;
 		}
 
-		dcfg |= USB_DWC2_DCFG_DEVSPD_USBFS1148
-			<< USB_DWC2_DCFG_DEVSPD_POS;
+		dcfg |= usb_dwc2_set_dcfg_devspd(USB_DWC2_DCFG_DEVSPD_USBFS1148);
 		hs_phy = false;
 	}
 

@@ -249,7 +249,9 @@ static inline int usbhs_init_caps(const struct device *dev)
 	struct udc_data *data = dev->data;
 
 	data->caps.can_detect_vbus = true;
-	data->caps.hs = true;
+	if (IS_ENABLED(CONFIG_UDC_DRIVER_SUPPORTS_HIGH_SPEED)) {
+		data->caps.hs = true;
+	}
 
 	return 0;
 }
