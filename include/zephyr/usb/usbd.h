@@ -844,11 +844,14 @@ int usbd_register_class(struct usbd_context *uds_ctx,
  * @param[in] uds_ctx Pointer to USB device support context
  * @param[in] speed   Configuration speed
  * @param[in] cfg     Configuration value (bConfigurationValue)
+ * @param[in] blocklist Null pointer terminated array of pointers to string
+ *                      literals to be used as a block list.
  *
  * @return 0 on success, other values on fail.
  */
 int usbd_register_all_classes(struct usbd_context *uds_ctx,
-			      const enum usbd_speed speed, uint8_t cfg);
+			      const enum usbd_speed speed, uint8_t cfg,
+			      const char *const blocklist[]);
 
 /**
  * @brief Unregister an USB class instance
