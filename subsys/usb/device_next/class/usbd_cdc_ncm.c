@@ -43,7 +43,18 @@ enum {
 #define CDC_NCM_SEND_MAX_DATAGRAMS_PER_NTB 1
 #define CDC_NCM_SEND_NTB_MAX_SIZE 2048
 
-/* Chapter 6.3 table 6-6 */
+/* Chapter 6.3 table 6-5 and 6-6 */
+struct cdc_ncm_notification {
+	union {
+		uint8_t bmRequestType;
+		struct usb_req_type_field RequestType;
+	};
+	uint8_t bNotificationType;
+	uint16_t wValue;
+	uint16_t wIndex;
+	uint16_t wLength;
+} __packed;
+
 enum ncm_notification_code {
 	NETWORK_CONNECTION      = 0x00,
 	RESPONSE_AVAILABLE      = 0x01,
@@ -399,7 +410,7 @@ static int cdc_ncm_send_notification(const struct device *dev,
 {
 	struct cdc_ncm_eth_data *data = dev->data;
 	struct usbd_class_data *c_data = data->c_data;
-	struct cdc_xcm_notification notification = {
+	struct cdc_ncm_notification notification = {
 		.RequestType = {
 			.direction = USB_REQTYPE_DIR_TO_HOST,
 			.type = USB_REQTYPE_TYPE_CLASS,
