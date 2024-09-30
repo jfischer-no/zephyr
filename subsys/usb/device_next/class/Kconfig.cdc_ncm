@@ -20,6 +20,12 @@ config USBD_CDC_NCM_MAX_DGRAM_PER_NTB
 	help
 	  How many datagrams we are able to receive per NTB.
 
+config USBD_CDC_NCM_SUPPORT_NTB32
+	bool "Support NTB32 format"
+	help
+	  Enable support for NTB32 format which allows larger
+	  packet sizes.
+
 module = USBD_CDC_NCM
 module-str = usbd cdc_ncm
 default-count = 1

@@ -20,11 +20,11 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(cdc_ncm, CONFIG_USBD_CDC_NCM_LOG_LEVEL);
 
-#define CDC_NCM_ALIGNMENT           4
-#define CDC_NCM_EP_MPS_INT          64
-#define CDC_NCM_INTERVAL_DEFAULT    50000UL
-#define CDC_NCM_FS_INT_EP_INTERVAL  USB_FS_INT_EP_INTERVAL(10000U)
-#define CDC_NCM_HS_INT_EP_INTERVAL  USB_HS_INT_EP_INTERVAL(10000U)
+#define CDC_NCM_ALIGNMENT          4U
+#define CDC_NCM_EP_MPS_INT         64U
+#define CDC_NCM_INTERVAL_DEFAULT   50000UL
+#define CDC_NCM_FS_INT_EP_INTERVAL USB_FS_INT_EP_INTERVAL(10000U)
+#define CDC_NCM_HS_INT_EP_INTERVAL USB_HS_INT_EP_INTERVAL(10000U)
 
 #define USB_SPEED_FS 12000000UL
 #define USB_SPEED_HS 480000000UL
@@ -101,6 +101,13 @@ struct ndp32_datagram {
 	uint32_t wDatagramLength;
 } __packed;
 
+struct ndp16 {
+	uint32_t dwSignature;
+	uint16_t wLength;
+	uint16_t wNextNdpIndex;
+	struct ndp16_datagram datagram[];
+} __packed;
+
 /* Chapter 6.2.1 table 6-3 */
 struct ntb_parameters {
 	uint16_t wLength;
@@ -120,30 +127,47 @@ struct ntb_parameters {
 #define NTB16_FORMAT_SUPPORTED BIT(0)
 #define NTB32_FORMAT_SUPPORTED BIT(1)
 
-#define NTB_FORMAT_SUPPORTED (NTB16_FORMAT_SUPPORTED | NTB32_FORMAT_SUPPORTED)
+#define NTB_FORMAT_SUPPORTED (NTB16_FORMAT_SUPPORTED | \
+			      COND_CODE_1(CONFIG_USBD_CDC_NCM_SUPPORT_NTB32, \
+					  (NTB32_FORMAT_SUPPORTED), (0)))
 
-static struct ntb_parameters ntb_params = {
-	.wLength                 = sys_cpu_to_le16(sizeof(struct ntb_parameters)),
-	.bmNtbFormatsSupported   = sys_cpu_to_le16(NTB_FORMAT_SUPPORTED),
-	.dwNtbInMaxSize          = sys_cpu_to_le32(CDC_NCM_SEND_NTB_MAX_SIZE),
-	.wNdbInDivisor           = sys_cpu_to_le16(4),
-	.wNdbInPayloadRemainder  = sys_cpu_to_le16(0),
-	.wNdbInAlignment         = sys_cpu_to_le16(CDC_NCM_ALIGNMENT),
-	.wReserved               = sys_cpu_to_le16(0),
-	.dwNtbOutMaxSize         = sys_cpu_to_le32(CDC_NCM_RECV_NTB_MAX_SIZE),
-	.wNdbOutDivisor          = sys_cpu_to_le16(4),
-	.wNdbOutPayloadRemainder = sys_cpu_to_le16(0),
-	.wNdbOutAlignment        = sys_cpu_to_le16(CDC_NCM_ALIGNMENT),
-	.wNtbOutMaxDatagrams     = sys_cpu_to_le16(CDC_NCM_RECV_MAX_DATAGRAMS_PER_NTB)
-};
+BUILD_ASSERT(!IS_ENABLED(CONFIG_USBD_CDC_NCM_SUPPORT_NTB32), "NTB32 not yet supported!");
+
+struct ncm_notify_network_connection {
+	struct usb_setup_packet header;
+} __packed;
+
+struct ncm_notify_connection_speed_change {
+	struct usb_setup_packet header;
+	uint32_t downlink;
+	uint32_t uplink;
+} __packed;
+
+union send_ntb {
+	struct {
+		struct nth16 nth;
+		struct ndp16 ndp;
+		struct ndp16_datagram ndp_datagram[CDC_NCM_SEND_MAX_DATAGRAMS_PER_NTB + 1];
+	};
+
+	uint8_t data[CDC_NCM_SEND_NTB_MAX_SIZE];
+} __packed;
+
+union recv_ntb {
+	struct {
+		struct nth16 nth;
+	};
+
+	uint8_t data[CDC_NCM_RECV_NTB_MAX_SIZE];
+} __packed;
 
 /*
  * Transfers through two endpoints proceed in a synchronous manner,
- * with maximum block of NET_ETH_MAX_FRAME_SIZE.
+ * with maximum block of CDC_NCM_SEND_NTB_MAX_SIZE.
  */
 UDC_BUF_POOL_DEFINE(cdc_ncm_ep_pool,
 		    DT_NUM_INST_STATUS_OKAY(DT_DRV_COMPAT) * 2,
-		    NET_ETH_MAX_FRAME_SIZE,
+		    MAX(CDC_NCM_SEND_NTB_MAX_SIZE, CDC_NCM_RECV_NTB_MAX_SIZE),
 		    sizeof(struct udc_buf_info), NULL);
 
 /*
@@ -173,6 +197,13 @@ struct usbd_cdc_ncm_desc {
 	struct usb_desc_header nil_desc;
 };
 
+enum iface_state {
+	IF_STATE_INIT,
+	IF_STATE_ALTERNATE_SETTING_0_SKIPPED,
+	IF_STATE_SPEED_SENT,
+	IF_STATE_DONE,
+};
+
 struct cdc_ncm_eth_data {
 	struct usbd_class_data *c_data;
 	struct usbd_desc_node *const mac_desc_data;
@@ -183,10 +214,16 @@ struct cdc_ncm_eth_data {
 	struct net_if *iface;
 	uint8_t mac_addr[6];
 
+	atomic_t state;
+	enum iface_state if_state;
+	uint16_t tx_seq;
+	uint16_t rx_seq;
+
 	struct k_sem sync_sem;
 	struct k_sem notif_sem;
-	atomic_t state;
 };
+
+static void ncm_send_notification(struct usbd_class_data *const c_data);
 
 static uint8_t cdc_ncm_get_ctrl_if(struct cdc_ncm_eth_data *const data)
 {
@@ -325,12 +362,170 @@ static int cdc_ncm_out_start(struct usbd_class_data *const c_data)
 	return  ret;
 }
 
+static int verify_nth16(const union recv_ntb *ntb, uint16_t len, uint16_t seq)
+{
+	const struct nth16 *nth16 = &ntb->nth;
+	const struct ndp16 *ndp16;
+
+	if (len < sizeof(ntb->nth)) {
+		LOG_DBG("DROP: %slen %d", " ", len);
+		return -EINVAL;
+	}
+
+	if (sys_le16_to_cpu(nth16->wHeaderLength) != sizeof(struct nth16)) {
+		LOG_DBG("DROP: %slen %d", "nth16 ",
+			sys_le16_to_cpu(nth16->wHeaderLength));
+		return -EINVAL;
+	}
+
+	if (sys_le32_to_cpu(nth16->dwSignature) != NTH16_SIGNATURE) {
+		LOG_DBG("DROP: %s signature 0x%04x", "nth16",
+			(unsigned)sys_le32_to_cpu(nth16->dwSignature));
+		return -EINVAL;
+	}
+
+	if (len < (sizeof(struct nth16) + sizeof(struct ndp16) +
+		   2U * sizeof(struct ndp16_datagram))) {
+		LOG_DBG("DROP: %slen %d", "min ", len);
+		return -EINVAL;
+	}
+
+	if (sys_le16_to_cpu(nth16->wBlockLength) > len) {
+		LOG_DBG("DROP: %slen %d", "block ",
+			sys_le16_to_cpu(nth16->wBlockLength));
+		return -EINVAL;
+	}
+
+	if (sys_le16_to_cpu(nth16->wBlockLength) > CDC_NCM_RECV_NTB_MAX_SIZE) {
+		LOG_DBG("DROP: %slen %d", "block max ",
+			sys_le16_to_cpu(nth16->wBlockLength));
+		return -EINVAL;
+	}
+
+	if ((sys_le16_to_cpu(nth16->wNdpIndex) < sizeof(nth16)) ||
+	    (sys_le16_to_cpu(nth16->wNdpIndex) >
+	     (len - (sizeof(struct ndp16) + 2U * sizeof(struct ndp16_datagram))))) {
+		LOG_DBG("DROP: ndp pos %d (%d)",
+			sys_le16_to_cpu(nth16->wNdpIndex), len);
+		return -EINVAL;
+	}
+
+	if (sys_le16_to_cpu(nth16->wSequence) != 0 &&
+	    sys_le16_to_cpu(nth16->wSequence) != (seq + 1)) {
+		LOG_DBG("DROP: seq %d %d",
+			seq,
+			sys_le16_to_cpu(nth16->wSequence));
+		return -EINVAL;
+	}
+
+	ndp16 = (const struct ndp16 *)(ntb->data + sys_le16_to_cpu(nth16->wNdpIndex));
+
+	if (sys_le16_to_cpu(ndp16->wLength) <
+	    (sizeof(struct ndp16) + 2U * sizeof(struct ndp16_datagram))) {
+		LOG_DBG("DROP: %slen %d", "ndp16 ",
+			sys_le16_to_cpu(ndp16->wLength));
+		return -EINVAL;
+	}
+
+	if ((sys_le32_to_cpu(ndp16->dwSignature) != NDP16_SIGNATURE_NCM0) &&
+	    (sys_le32_to_cpu(ndp16->dwSignature) != NDP16_SIGNATURE_NCM1)) {
+		LOG_DBG("DROP: %s signature 0x%04x", "ndp16",
+			(unsigned)sys_le32_to_cpu(ndp16->dwSignature));
+		return -EINVAL;
+	}
+
+	if (sys_le16_to_cpu(ndp16->wNextNdpIndex) != 0) {
+		LOG_DBG("DROP: wNextNdpIndex %d",
+			sys_le16_to_cpu(ndp16->wNextNdpIndex));
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int check_frame(struct cdc_ncm_eth_data *data, struct net_buf *const buf)
+{
+	const union recv_ntb *ntb = (union recv_ntb *)buf->data;
+	const struct nth16 *nth16 = &ntb->nth;
+	uint16_t len = buf->len;
+	int ndx = 0;
+	const struct ndp16_datagram *ndp_datagram;
+	const struct ndp16 *ndp16;
+	uint16_t max_ndx;
+	int ret;
+
+	/* TODO: support nth32 */
+	ret = verify_nth16(ntb, len, data->rx_seq);
+	if (ret < 0) {
+		return ret;
+	}
+
+	ndp_datagram = (const struct ndp16_datagram *)
+		(ntb->data + sys_le16_to_cpu(nth16->wNdpIndex) +
+		 sizeof(struct ndp16));
+
+	ndp16 = (const struct ndp16 *)(ntb->data + sys_le16_to_cpu(nth16->wNdpIndex));
+
+	max_ndx = (uint16_t)((sys_le16_to_cpu(ndp16->wLength) - sizeof(struct ndp16)) /
+			     sizeof(struct ndp16_datagram));
+
+	if (max_ndx > (CDC_NCM_RECV_MAX_DATAGRAMS_PER_NTB + 1)) {
+		LOG_DBG("DROP: dgram count %d (%d)", max_ndx - 1,
+			sys_le16_to_cpu(ntb->nth.wBlockLength));
+		return -EINVAL;
+	}
+
+	if ((sys_le16_to_cpu(ndp_datagram[max_ndx-1].wDatagramIndex) != 0) ||
+	    (sys_le16_to_cpu(ndp_datagram[max_ndx-1].wDatagramLength) != 0)) {
+		LOG_DBG("DROP: max_ndx");
+		return -EINVAL;
+	}
+
+	while (sys_le16_to_cpu(ndp_datagram[ndx].wDatagramIndex) != 0 &&
+	       sys_le16_to_cpu(ndp_datagram[ndx].wDatagramLength) != 0) {
+
+		LOG_DBG("idx %d len %d",
+			sys_le16_to_cpu(ndp_datagram[ndx].wDatagramIndex),
+			sys_le16_to_cpu(ndp_datagram[ndx].wDatagramLength));
+
+		if (sys_le16_to_cpu(ndp_datagram[ndx].wDatagramIndex) > len) {
+			LOG_DBG("DROP: %s datagram[%d] %d (%d)", "start",
+				ndx,
+				sys_le16_to_cpu(ndp_datagram[ndx].wDatagramIndex),
+				len);
+			return -EINVAL;
+		}
+
+		if (sys_le16_to_cpu(ndp_datagram[ndx].wDatagramIndex) +
+		    sys_le16_to_cpu(ndp_datagram[ndx].wDatagramLength) > len) {
+			LOG_DBG("DROP: %s datagram[%d] %d (%d)", "stop",
+				ndx,
+				sys_le16_to_cpu(ndp_datagram[ndx].wDatagramIndex) +
+				sys_le16_to_cpu(ndp_datagram[ndx].wDatagramLength),
+				len);
+			return -EINVAL;
+		}
+
+		ndx++;
+	}
+
+	data->rx_seq = sys_le16_to_cpu(nth16->wSequence);
+
+	LOG_HEXDUMP_DBG(ntb->data, len, "NTB");
+
+	return 0;
+}
+
 static int cdc_ncm_acl_out_cb(struct usbd_class_data *const c_data,
 			      struct net_buf *const buf, const int err)
 {
 	const struct device *dev = usbd_class_get_private(c_data);
+	const union recv_ntb *ntb = (union recv_ntb *)buf->data;
 	struct cdc_ncm_eth_data *data = dev->data;
+	const struct ndp16_datagram *ndp_datagram;
 	struct net_pkt *pkt;
+	uint16_t start, len;
+	int ret;
 
 	if (err || buf->len == 0) {
 		goto restart_out_transfer;
@@ -348,6 +543,18 @@ static int cdc_ncm_acl_out_cb(struct usbd_class_data *const c_data,
 			net_buf_remove_u8(buf);
 		}
 	}
+
+	ret = check_frame(data, buf);
+	if (ret < 0) {
+		goto restart_out_transfer;
+	}
+
+	ntb = (union recv_ntb *)buf->data;
+	ndp_datagram = (struct ndp16_datagram *)
+		(ntb->data + sys_le16_to_cpu(ntb->nth.wNdpIndex) + sizeof(struct ndp16));
+
+	start = sys_le16_to_cpu(ndp_datagram[0].wDatagramIndex);
+	len = sys_le16_to_cpu(ndp_datagram[0].wDatagramLength);
 
 	pkt = net_pkt_rx_alloc_with_buffer(data->iface, buf->len,
 					   AF_UNSPEC, 0, K_FOREVER);
@@ -371,6 +578,7 @@ static int cdc_ncm_acl_out_cb(struct usbd_class_data *const c_data,
 
 restart_out_transfer:
 	net_buf_unref(buf);
+
 	atomic_clear_bit(&data->state, CDC_NCM_OUT_ENGAGED);
 
 	return cdc_ncm_out_start(c_data);
@@ -397,6 +605,8 @@ static int usbd_cdc_ncm_request(struct usbd_class_data *const c_data,
 	}
 
 	if (bi->ep == cdc_ncm_get_int_in(c_data)) {
+		ncm_send_notification(c_data);
+
 		k_sem_give(&data->notif_sem);
 
 		return 0;
@@ -406,21 +616,10 @@ static int usbd_cdc_ncm_request(struct usbd_class_data *const c_data,
 }
 
 static int cdc_ncm_send_notification(const struct device *dev,
-				     const bool connected)
+				     void *notification, size_t notification_size)
 {
 	struct cdc_ncm_eth_data *data = dev->data;
 	struct usbd_class_data *c_data = data->c_data;
-	struct cdc_ncm_notification notification = {
-		.RequestType = {
-			.direction = USB_REQTYPE_DIR_TO_HOST,
-			.type = USB_REQTYPE_TYPE_CLASS,
-			.recipient = USB_REQTYPE_RECIPIENT_INTERFACE,
-		},
-		.bNotificationType = USB_CDC_NETWORK_CONNECTION,
-		.wValue = sys_cpu_to_le16((uint16_t)connected),
-		.wIndex = sys_cpu_to_le16(cdc_ncm_get_ctrl_if(data)),
-		.wLength = 0,
-	};
 	struct net_buf *buf;
 	uint8_t ep;
 	int ret;
@@ -436,12 +635,13 @@ static int cdc_ncm_send_notification(const struct device *dev,
 	}
 
 	ep = cdc_ncm_get_int_in(c_data);
-	buf = usbd_ep_buf_alloc(c_data, ep, sizeof(struct cdc_ncm_notification));
+	buf = usbd_ep_buf_alloc(c_data, ep, notification_size);
 	if (buf == NULL) {
 		return -ENOMEM;
 	}
 
-	net_buf_add_mem(buf, &notification, sizeof(struct cdc_ncm_notification));
+	net_buf_add_mem(buf, notification, notification_size);
+
 	ret = usbd_ep_enqueue(c_data, buf);
 	if (ret) {
 		LOG_ERR("Failed to enqueue net_buf for 0x%02x", ep);
@@ -455,6 +655,85 @@ static int cdc_ncm_send_notification(const struct device *dev,
 	return 0;
 }
 
+static int cdc_ncm_send_connected(const struct device *dev,
+				  const bool connected)
+{
+	struct cdc_ncm_eth_data *data = dev->data;
+	struct cdc_ncm_notification notify_connection = {
+		.RequestType = {
+			.direction = USB_REQTYPE_DIR_TO_HOST,
+			.type = USB_REQTYPE_TYPE_CLASS,
+			.recipient = USB_REQTYPE_RECIPIENT_INTERFACE,
+		},
+		.bNotificationType = USB_CDC_NETWORK_CONNECTION,
+		.wValue = sys_cpu_to_le16((uint16_t)connected),
+		.wIndex = sys_cpu_to_le16(cdc_ncm_get_ctrl_if(data)),
+		.wLength = 0,
+	};
+	int ret;
+
+	if (!atomic_test_bit(&data->state, CDC_NCM_CLASS_ENABLED)) {
+		LOG_INF("USB configuration is not enabled");
+		return 0;
+	}
+
+	ret = cdc_ncm_send_notification(dev, &notify_connection,
+					sizeof(notify_connection));
+	if (ret < 0) {
+		LOG_DBG("Cannot send %s (%d)",
+			connected ? "connected" : "disconnected", ret);
+	}
+
+	return ret;
+}
+
+
+static void ncm_send_notification(struct usbd_class_data *const c_data)
+{
+	struct usbd_context *uds_ctx = usbd_class_get_ctx(c_data);
+	const struct device *dev = usbd_class_get_private(c_data);
+	struct cdc_ncm_eth_data *data = dev->data;
+	int ret;
+
+	if (data->if_state == IF_STATE_ALTERNATE_SETTING_0_SKIPPED) {
+		uint32_t usb_speed = (usbd_bus_speed(uds_ctx) == USBD_SPEED_FS) ?
+						    USB_SPEED_FS : USB_SPEED_HS;
+		struct ncm_notify_connection_speed_change notify_speed_change = {
+			.header = {
+				.RequestType = {
+					.recipient = USB_REQTYPE_RECIPIENT_INTERFACE,
+					.type      = USB_REQTYPE_TYPE_CLASS,
+					.direction = USB_REQTYPE_DIR_TO_HOST
+				},
+				.bRequest = CONNECTION_SPEED_CHANGE,
+				.wLength  = sys_cpu_to_le16(8),
+				.wIndex = sys_cpu_to_le16(cdc_ncm_get_ctrl_if(data)),
+			},
+			.downlink = sys_cpu_to_le32(usb_speed),
+			.uplink   = sys_cpu_to_le32(usb_speed),
+		};
+
+
+		data->if_state = IF_STATE_SPEED_SENT;
+
+		ret = cdc_ncm_send_notification(dev,
+						&notify_speed_change,
+						sizeof(notify_speed_change));
+		if (ret < 0) {
+			LOG_DBG("Cannot send %s (%d)", "speed change", ret);
+		}
+
+		return;
+	}
+
+	if (data->if_state == IF_STATE_SPEED_SENT) {
+
+		data->if_state = IF_STATE_DONE;
+
+		return;
+	}
+}
+
 static void usbd_cdc_ncm_update(struct usbd_class_data *const c_data,
 				const uint8_t iface, const uint8_t alternate)
 {
@@ -462,21 +741,31 @@ static void usbd_cdc_ncm_update(struct usbd_class_data *const c_data,
 	struct cdc_ncm_eth_data *data = dev->data;
 	struct usbd_cdc_ncm_desc *desc = data->desc;
 	const uint8_t data_iface = desc->if1_1.bInterfaceNumber;
+	int ret;
 
-	LOG_INF("New configuration, interface %u alternate %u",
+	LOG_DBG("New configuration, interface %u alternate %u",
 		iface, alternate);
 
 	if (data_iface == iface && alternate == 0) {
 		net_if_carrier_off(data->iface);
+
+		LOG_DBG("Skip iface %u alternate %u", iface, alternate);
+
+		data->tx_seq = 0;
+		data->if_state = IF_STATE_ALTERNATE_SETTING_0_SKIPPED;
+	}
+
+	if (data->if_state == IF_STATE_INIT) {
+		data->if_state = IF_STATE_ALTERNATE_SETTING_0_SKIPPED;
 	}
 
 	if (data_iface == iface && alternate == 1) {
 		net_if_carrier_on(data->iface);
 
-		if (cdc_ncm_out_start(c_data)) {
-			LOG_ERR("Failed to start OUT transfer");
+		ret = cdc_ncm_out_start(c_data);
+		if (ret < 0) {
+			LOG_ERR("Failed to start OUT transfer (%d)", ret);
 		}
-
 	}
 }
 
@@ -526,14 +815,20 @@ static int usbd_cdc_ncm_ctd(struct usbd_class_data *const c_data,
 {
 	if (setup->RequestType.recipient == USB_REQTYPE_RECIPIENT_INTERFACE) {
 		if (setup->bRequest == SET_ETHERNET_PACKET_FILTER) {
-			LOG_INF("bRequest 0x%02x (%s) not implemented",
+			LOG_DBG("bRequest 0x%02x (%s) not implemented",
 				setup->bRequest, "SetPacketFilter");
 			return 0;
 		}
 
 		if (setup->bRequest == SET_NTB_INPUT_SIZE) {
-			LOG_INF("bRequest 0x%02x (%s) not implemented",
+			LOG_DBG("bRequest 0x%02x (%s) not implemented",
 				setup->bRequest, "SetNtbInputSize");
+			return 0;
+		}
+
+		if (setup->bRequest == SET_NTB_FORMAT) {
+			LOG_DBG("bRequest 0x%02x (%s) not implemented",
+				setup->bRequest, "SetNtbFormat");
 			return 0;
 		}
 	}
@@ -551,18 +846,37 @@ static int usbd_cdc_ncm_cth(struct usbd_class_data *const c_data,
 {
 	int ret = 0;
 
+	LOG_DBG("%d: %d %d %d %d", setup->RequestType.type, setup->bRequest,
+		setup->wLength, setup->wIndex, setup->wValue);
+
 	if (setup->RequestType.type != USB_REQTYPE_TYPE_CLASS) {
 		ret = -ENOTSUP;
 		goto out;
 	}
 
-	LOG_DBG("%s: %d %d %d %d", STRINGIFY(USB_REQTYPE_TYPE_CLASS),
-		setup->bRequest, setup->wLength, setup->wIndex, setup->wValue);
-
 	switch (setup->bRequest) {
-	case GET_NTB_PARAMETERS:
+	case GET_NTB_PARAMETERS: {
+		struct ntb_parameters ntb_params = {
+			.wLength = sys_cpu_to_le16(sizeof(struct ntb_parameters)),
+			.bmNtbFormatsSupported = sys_cpu_to_le16(NTB_FORMAT_SUPPORTED),
+			.dwNtbInMaxSize = sys_cpu_to_le32(CDC_NCM_SEND_NTB_MAX_SIZE),
+			.wNdbInDivisor = sys_cpu_to_le16(4),
+			.wNdbInPayloadRemainder = sys_cpu_to_le16(0),
+			.wNdbInAlignment = sys_cpu_to_le16(CDC_NCM_ALIGNMENT),
+			.wReserved = sys_cpu_to_le16(0),
+			.dwNtbOutMaxSize = sys_cpu_to_le32(CDC_NCM_RECV_NTB_MAX_SIZE),
+			.wNdbOutDivisor = sys_cpu_to_le16(4),
+			.wNdbOutPayloadRemainder = sys_cpu_to_le16(0),
+			.wNdbOutAlignment = sys_cpu_to_le16(CDC_NCM_ALIGNMENT),
+			.wNtbOutMaxDatagrams = sys_cpu_to_le16(CDC_NCM_RECV_MAX_DATAGRAMS_PER_NTB),
+		};
+
 		LOG_DBG("GET_NTB_PARAMETERS");
 		net_buf_add_mem(buf, &ntb_params, sizeof(ntb_params));
+		break;
+	}
+	case SET_NTB_FORMAT:
+		LOG_DBG("SET_NTB_FORMAT");
 		break;
 
 	case SET_ETHERNET_PACKET_FILTER:
@@ -601,7 +915,7 @@ static int usbd_cdc_ncm_init(struct usbd_class_data *const c_data)
 	const struct device *dev = usbd_class_get_private(c_data);
 	struct cdc_ncm_eth_data *const data = dev->data;
 	struct usbd_cdc_ncm_desc *desc = data->desc;
-	const uint8_t if_num = desc->if0.bInterfaceNumber;
+	uint8_t if_num = desc->if0.bInterfaceNumber;
 
 	/* Update relevant b*Interface fields */
 	desc->iad.bFirstInterface = if_num;
@@ -648,6 +962,7 @@ static int cdc_ncm_send(const struct device *dev, struct net_pkt *const pkt)
 	struct usbd_class_data *c_data = data->c_data;
 	size_t len = net_pkt_get_len(pkt);
 	struct net_buf *buf;
+	union send_ntb *ntb;
 
 	if (len > NET_ETH_MAX_FRAME_SIZE) {
 		LOG_WRN("Trying to send too large packet, drop");
@@ -656,7 +971,9 @@ static int cdc_ncm_send(const struct device *dev, struct net_pkt *const pkt)
 
 	if (!atomic_test_bit(&data->state, CDC_NCM_CLASS_ENABLED) ||
 	    !atomic_test_bit(&data->state, CDC_NCM_IFACE_UP)) {
-		LOG_INF("Configuration is not enabled or interface not ready");
+		LOG_DBG("Configuration is not enabled or interface not ready (%d / %d)",
+			atomic_test_bit(&data->state, CDC_NCM_CLASS_ENABLED),
+			atomic_test_bit(&data->state, CDC_NCM_IFACE_UP));
 		return -EACCES;
 	}
 
@@ -666,16 +983,36 @@ static int cdc_ncm_send(const struct device *dev, struct net_pkt *const pkt)
 		return -ENOMEM;
 	}
 
-	if (net_pkt_read(pkt, buf->data, len)) {
+	ntb = (union send_ntb *)buf->data;
+
+	ntb->nth.dwSignature = sys_cpu_to_le32(NTH16_SIGNATURE);
+	ntb->nth.wHeaderLength = sys_cpu_to_le16(sizeof(struct nth16));
+	ntb->nth.wSequence = sys_cpu_to_le16(++data->tx_seq);
+	ntb->nth.wNdpIndex = sys_cpu_to_le16(sizeof(struct nth16));
+	ntb->ndp.dwSignature = sys_cpu_to_le32(NDP16_SIGNATURE_NCM0);
+	ntb->ndp.wLength = sys_cpu_to_le16(sizeof(struct ndp16) +
+					   (CDC_NCM_SEND_MAX_DATAGRAMS_PER_NTB + 1) *
+					   sizeof(struct ndp16_datagram));
+	ntb->ndp.wNextNdpIndex = 0;
+	ntb->ndp_datagram[0].wDatagramIndex =
+		sys_cpu_to_le16(sys_le16_to_cpu(ntb->nth.wHeaderLength) +
+				sys_le16_to_cpu(ntb->ndp.wLength));
+	ntb->ndp_datagram[0].wDatagramLength = sys_cpu_to_le16(len);
+	ntb->ndp_datagram[1].wDatagramIndex  = 0;
+	ntb->ndp_datagram[1].wDatagramLength = 0;
+	ntb->nth.wBlockLength = sys_cpu_to_le16(
+		sys_le16_to_cpu(ntb->ndp_datagram[0].wDatagramIndex) + len);
+
+	if (net_pkt_read(pkt, ntb->data +
+			 sys_le16_to_cpu(ntb->ndp_datagram[0].wDatagramIndex), len)) {
 		LOG_ERR("Failed copy net_pkt");
 		net_buf_unref(buf);
-
 		return -ENOBUFS;
 	}
 
-	net_buf_add(buf, len);
+	net_buf_add(buf, sys_le16_to_cpu(ntb->nth.wBlockLength));
 
-	if (!(buf->len % cdc_ncm_get_bulk_in_mps(c_data))) {
+	if (sys_le16_to_cpu(ntb->nth.wBlockLength) % cdc_ncm_get_bulk_in_mps(c_data) == 0) {
 		udc_ep_buf_set_zlp(buf);
 	}
 
@@ -716,7 +1053,7 @@ static int cdc_ncm_iface_start(const struct device *dev)
 
 	LOG_DBG("Start interface %d", net_if_get_by_iface(data->iface));
 
-	ret = cdc_ncm_send_notification(dev, true);
+	ret = cdc_ncm_send_connected(dev, true);
 	if (!ret) {
 		atomic_set_bit(&data->state, CDC_NCM_IFACE_UP);
 	}
@@ -731,8 +1068,8 @@ static int cdc_ncm_iface_stop(const struct device *dev)
 
 	LOG_DBG("Stop interface %d", net_if_get_by_iface(data->iface));
 
-	ret = cdc_ncm_send_notification(dev, false);
-	if (!ret) {
+	ret = cdc_ncm_send_connected(dev, false);
+	if (ret < 0) {
 		atomic_clear_bit(&data->state, CDC_NCM_IFACE_UP);
 	}
 
