@@ -124,6 +124,13 @@ struct ntb_parameters {
 	uint16_t wNtbOutMaxDatagrams;
 } __packed;
 
+/* Chapter 6.2.7 table 6-4 */
+struct ntb_input_size {
+	uint32_t dwNtbInMaxSize;
+	uint16_t wNtbInMaxDatagrams;
+	uint16_t wReserved;
+} __packed;
+
 #define NTB16_FORMAT_SUPPORTED BIT(0)
 #define NTB32_FORMAT_SUPPORTED BIT(1)
 
@@ -199,8 +206,8 @@ struct usbd_cdc_ncm_desc {
 
 enum iface_state {
 	IF_STATE_INIT,
-	IF_STATE_ALTERNATE_SETTING_0_SKIPPED,
 	IF_STATE_SPEED_SENT,
+	IF_STATE_CONNECTION_STATUS_SENT,
 	IF_STATE_DONE,
 };
 
@@ -605,9 +612,9 @@ static int usbd_cdc_ncm_request(struct usbd_class_data *const c_data,
 	}
 
 	if (bi->ep == cdc_ncm_get_int_in(c_data)) {
-		ncm_send_notification(c_data);
-
 		k_sem_give(&data->notif_sem);
+
+		ncm_send_notification(c_data);
 
 		return 0;
 	}
@@ -635,6 +642,7 @@ static int cdc_ncm_send_notification(const struct device *dev,
 	}
 
 	ep = cdc_ncm_get_int_in(c_data);
+
 	buf = usbd_ep_buf_alloc(c_data, ep, notification_size);
 	if (buf == NULL) {
 		return -ENOMEM;
@@ -672,11 +680,6 @@ static int cdc_ncm_send_connected(const struct device *dev,
 	};
 	int ret;
 
-	if (!atomic_test_bit(&data->state, CDC_NCM_CLASS_ENABLED)) {
-		LOG_INF("USB configuration is not enabled");
-		return 0;
-	}
-
 	ret = cdc_ncm_send_notification(dev, &notify_connection,
 					sizeof(notify_connection));
 	if (ret < 0) {
@@ -687,49 +690,62 @@ static int cdc_ncm_send_connected(const struct device *dev,
 	return ret;
 }
 
+static int cdc_ncm_send_speed_change(const struct device *dev)
+{
+	struct cdc_ncm_eth_data *data = dev->data;
+	struct usbd_class_data *c_data = data->c_data;
+	struct usbd_context *uds_ctx = usbd_class_get_ctx(c_data);
+	uint32_t usb_speed = (usbd_bus_speed(uds_ctx) == USBD_SPEED_FS) ?
+		USB_SPEED_FS : USB_SPEED_HS;
+	struct ncm_notify_connection_speed_change notify_speed_change = {
+		.header = {
+			.RequestType = {
+				.recipient = USB_REQTYPE_RECIPIENT_INTERFACE,
+				.type      = USB_REQTYPE_TYPE_CLASS,
+				.direction = USB_REQTYPE_DIR_TO_HOST
+			},
+			.bRequest = CONNECTION_SPEED_CHANGE,
+			.wLength  = sys_cpu_to_le16(8),
+			.wIndex = sys_cpu_to_le16(cdc_ncm_get_ctrl_if(data)),
+		},
+		.downlink = sys_cpu_to_le32(usb_speed),
+		.uplink   = sys_cpu_to_le32(usb_speed),
+	};
+	int ret;
+
+	ret = cdc_ncm_send_notification(dev,
+					&notify_speed_change,
+					sizeof(notify_speed_change));
+	if (ret < 0) {
+		LOG_DBG("Cannot send %s (%d)", "speed change", ret);
+		return ret;
+	}
+
+	data->if_state = IF_STATE_SPEED_SENT;
+
+	return ret;
+}
+
 
 static void ncm_send_notification(struct usbd_class_data *const c_data)
 {
-	struct usbd_context *uds_ctx = usbd_class_get_ctx(c_data);
 	const struct device *dev = usbd_class_get_private(c_data);
 	struct cdc_ncm_eth_data *data = dev->data;
 	int ret;
 
-	if (data->if_state == IF_STATE_ALTERNATE_SETTING_0_SKIPPED) {
-		uint32_t usb_speed = (usbd_bus_speed(uds_ctx) == USBD_SPEED_FS) ?
-						    USB_SPEED_FS : USB_SPEED_HS;
-		struct ncm_notify_connection_speed_change notify_speed_change = {
-			.header = {
-				.RequestType = {
-					.recipient = USB_REQTYPE_RECIPIENT_INTERFACE,
-					.type      = USB_REQTYPE_TYPE_CLASS,
-					.direction = USB_REQTYPE_DIR_TO_HOST
-				},
-				.bRequest = CONNECTION_SPEED_CHANGE,
-				.wLength  = sys_cpu_to_le16(8),
-				.wIndex = sys_cpu_to_le16(cdc_ncm_get_ctrl_if(data)),
-			},
-			.downlink = sys_cpu_to_le32(usb_speed),
-			.uplink   = sys_cpu_to_le32(usb_speed),
-		};
-
-
-		data->if_state = IF_STATE_SPEED_SENT;
-
-		ret = cdc_ncm_send_notification(dev,
-						&notify_speed_change,
-						sizeof(notify_speed_change));
-		if (ret < 0) {
-			LOG_DBG("Cannot send %s (%d)", "speed change", ret);
+	if (data->if_state == IF_STATE_SPEED_SENT) {
+		ret = cdc_ncm_send_connected(dev, true);
+		if (!ret) {
+			LOG_DBG("Cannot send %s (%d)", "connection status", ret);
+			return;
 		}
 
+		data->if_state = IF_STATE_CONNECTION_STATUS_SENT;
 		return;
 	}
 
-	if (data->if_state == IF_STATE_SPEED_SENT) {
-
+	if (data->if_state == IF_STATE_CONNECTION_STATUS_SENT) {
 		data->if_state = IF_STATE_DONE;
-
 		return;
 	}
 }
@@ -740,7 +756,7 @@ static void usbd_cdc_ncm_update(struct usbd_class_data *const c_data,
 	const struct device *dev = usbd_class_get_private(c_data);
 	struct cdc_ncm_eth_data *data = dev->data;
 	struct usbd_cdc_ncm_desc *desc = data->desc;
-	const uint8_t data_iface = desc->if1_1.bInterfaceNumber;
+	uint8_t data_iface = desc->if1_1.bInterfaceNumber;
 	int ret;
 
 	LOG_DBG("New configuration, interface %u alternate %u",
@@ -752,11 +768,6 @@ static void usbd_cdc_ncm_update(struct usbd_class_data *const c_data,
 		LOG_DBG("Skip iface %u alternate %u", iface, alternate);
 
 		data->tx_seq = 0;
-		data->if_state = IF_STATE_ALTERNATE_SETTING_0_SKIPPED;
-	}
-
-	if (data->if_state == IF_STATE_INIT) {
-		data->if_state = IF_STATE_ALTERNATE_SETTING_0_SKIPPED;
 	}
 
 	if (data_iface == iface && alternate == 1) {
@@ -884,14 +895,19 @@ static int usbd_cdc_ncm_cth(struct usbd_class_data *const c_data,
 		ret = -ENOTSUP;
 		break;
 
-	case GET_NTB_INPUT_SIZE:
-		LOG_DBG("GET_NTB_INPUT_SIZE");
-		ret = -ENOTSUP;
-		break;
+	case GET_NTB_INPUT_SIZE: {
+		struct ntb_input_size input_size = {
+			.dwNtbInMaxSize = sys_cpu_to_le32(CDC_NCM_RECV_NTB_MAX_SIZE),
+			.wNtbInMaxDatagrams = sys_cpu_to_le16(CDC_NCM_RECV_MAX_DATAGRAMS_PER_NTB),
+			.wReserved = sys_cpu_to_le16(0),
+		};
 
+		LOG_DBG("GET_NTB_INPUT_SIZE");
+		net_buf_add_mem(buf, &input_size, sizeof(input_size));
+		break;
+	}
 	case SET_NTB_INPUT_SIZE:
 		LOG_DBG("SET_NTB_INPUT_SIZE");
-		ret = -ENOTSUP;
 		break;
 
 	default:
@@ -1053,12 +1069,14 @@ static int cdc_ncm_iface_start(const struct device *dev)
 
 	LOG_DBG("Start interface %d", net_if_get_by_iface(data->iface));
 
-	ret = cdc_ncm_send_connected(dev, true);
-	if (!ret) {
-		atomic_set_bit(&data->state, CDC_NCM_IFACE_UP);
+	atomic_set_bit(&data->state, CDC_NCM_IFACE_UP);
+
+	ret = cdc_ncm_send_speed_change(dev);
+	if (ret < 0) {
+		LOG_DBG("Cannot send speed change (%d)", ret);
 	}
 
-	return ret;
+	return 0;
 }
 
 static int cdc_ncm_iface_stop(const struct device *dev)
@@ -1190,7 +1208,7 @@ static struct usbd_cdc_ncm_desc cdc_ncm_desc_##n = {				\
 	.if0_int_ep = {								\
 		.bLength = sizeof(struct usb_ep_descriptor),			\
 		.bDescriptorType = USB_DESC_ENDPOINT,				\
-		.bEndpointAddress = 0x81,					\
+		.bEndpointAddress = 0x83,					\
 		.bmAttributes = USB_EP_TYPE_INTERRUPT,				\
 		.wMaxPacketSize = sys_cpu_to_le16(CDC_NCM_EP_MPS_INT),		\
 		.bInterval = CDC_NCM_FS_INT_EP_INTERVAL,			\
@@ -1199,7 +1217,7 @@ static struct usbd_cdc_ncm_desc cdc_ncm_desc_##n = {				\
 	.if0_hs_int_ep = {							\
 		.bLength = sizeof(struct usb_ep_descriptor),			\
 		.bDescriptorType = USB_DESC_ENDPOINT,				\
-		.bEndpointAddress = 0x81,					\
+		.bEndpointAddress = 0x83,					\
 		.bmAttributes = USB_EP_TYPE_INTERRUPT,				\
 		.wMaxPacketSize = sys_cpu_to_le16(CDC_NCM_EP_MPS_INT),		\
 		.bInterval = CDC_NCM_HS_INT_EP_INTERVAL,			\
@@ -1224,7 +1242,7 @@ static struct usbd_cdc_ncm_desc cdc_ncm_desc_##n = {				\
 		.bAlternateSetting = 1,						\
 		.bNumEndpoints = 2,						\
 		.bInterfaceClass = USB_BCC_CDC_DATA,				\
-		.bInterfaceSubClass = NCM_SUBCLASS,				\
+		.bInterfaceSubClass = 0,					\
 		.bInterfaceProtocol = NCM_DATA_PROTOCOL,			\
 		.iInterface = 0,						\
 	},									\
