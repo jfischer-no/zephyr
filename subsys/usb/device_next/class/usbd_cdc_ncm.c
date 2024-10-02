@@ -361,6 +361,7 @@ static int cdc_ncm_out_start(struct usbd_class_data *const c_data)
 	}
 
 	ret = usbd_ep_enqueue(c_data, buf);
+	LOG_ERR("enqueue out %u", buf->size);
 	if (ret) {
 		LOG_ERR("Failed to enqueue net_buf for 0x%02x", ep);
 		net_buf_unref(buf);
@@ -535,7 +536,10 @@ static int cdc_ncm_acl_out_cb(struct usbd_class_data *const c_data,
 	int ret;
 
 	if (err || buf->len == 0) {
-		goto restart_out_transfer;
+		//goto restart_out_transfer;
+		net_buf_unref(buf);
+		atomic_clear_bit(&data->state, CDC_NCM_OUT_ENGAGED);
+		return 0;
 	}
 
 	/* Linux considers by default that network usb device controllers are
@@ -553,6 +557,7 @@ static int cdc_ncm_acl_out_cb(struct usbd_class_data *const c_data,
 
 	ret = check_frame(data, buf);
 	if (ret < 0) {
+		LOG_ERR("check frame failed");
 		goto restart_out_transfer;
 	}
 
@@ -563,6 +568,7 @@ static int cdc_ncm_acl_out_cb(struct usbd_class_data *const c_data,
 	start = sys_le16_to_cpu(ndp_datagram[0].wDatagramIndex);
 	len = sys_le16_to_cpu(ndp_datagram[0].wDatagramLength);
 
+	LOG_ERR("start %u len %u", start, len);
 	pkt = net_pkt_rx_alloc_with_buffer(data->iface, buf->len,
 					   AF_UNSPEC, 0, K_FOREVER);
 	if (!pkt) {
@@ -576,7 +582,7 @@ static int cdc_ncm_acl_out_cb(struct usbd_class_data *const c_data,
 		goto restart_out_transfer;
 	}
 
-	LOG_DBG("Received packet len %zu", net_pkt_get_len(pkt));
+	LOG_ERR("Received packet len %zu", net_pkt_get_len(pkt));
 
 	if (net_recv_data(data->iface, pkt) < 0) {
 		LOG_ERR("Packet %p dropped by network stack", pkt);
@@ -600,6 +606,7 @@ static int usbd_cdc_ncm_request(struct usbd_class_data *const c_data,
 	struct udc_buf_info *bi;
 
 	bi = udc_get_buf_info(buf);
+	LOG_ERR("finished %x len %u", bi->ep, buf->len);
 
 	if (bi->ep == cdc_ncm_get_bulk_out(c_data)) {
 		return cdc_ncm_acl_out_cb(c_data, buf, err);
@@ -614,7 +621,7 @@ static int usbd_cdc_ncm_request(struct usbd_class_data *const c_data,
 	if (bi->ep == cdc_ncm_get_int_in(c_data)) {
 		k_sem_give(&data->notif_sem);
 
-		ncm_send_notification(c_data);
+		//ncm_send_notification(c_data);
 
 		return 0;
 	}
@@ -717,7 +724,7 @@ static int cdc_ncm_send_speed_change(const struct device *dev)
 					&notify_speed_change,
 					sizeof(notify_speed_change));
 	if (ret < 0) {
-		LOG_DBG("Cannot send %s (%d)", "speed change", ret);
+		LOG_ERR("Cannot send %s (%d)", "speed change", ret);
 		return ret;
 	}
 
@@ -759,7 +766,7 @@ static void usbd_cdc_ncm_update(struct usbd_class_data *const c_data,
 	uint8_t data_iface = desc->if1_1.bInterfaceNumber;
 	int ret;
 
-	LOG_DBG("New configuration, interface %u alternate %u",
+	LOG_WRN("New configuration, interface %u alternate %u",
 		iface, alternate);
 
 	if (data_iface == iface && alternate == 0) {
@@ -1034,6 +1041,7 @@ static int cdc_ncm_send(const struct device *dev, struct net_pkt *const pkt)
 
 	usbd_ep_enqueue(c_data, buf);
 	k_sem_take(&data->sync_sem, K_FOREVER);
+	LOG_ERR("sync_sem in");
 	net_buf_unref(buf);
 
 	return 0;
@@ -1067,11 +1075,12 @@ static int cdc_ncm_iface_start(const struct device *dev)
 	struct cdc_ncm_eth_data *data = dev->data;
 	int ret;
 
-	LOG_DBG("Start interface %d", net_if_get_by_iface(data->iface));
+	LOG_ERR("Start interface %d", net_if_get_by_iface(data->iface));
 
 	atomic_set_bit(&data->state, CDC_NCM_IFACE_UP);
 
-	ret = cdc_ncm_send_speed_change(dev);
+	//ret = cdc_ncm_send_speed_change(dev);
+	ret = cdc_ncm_send_connected(dev, true);
 	if (ret < 0) {
 		LOG_DBG("Cannot send speed change (%d)", ret);
 	}
