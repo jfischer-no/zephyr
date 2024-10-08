@@ -231,7 +231,8 @@ struct cdc_ncm_eth_data {
 	uint16_t rx_seq;
 
 	struct k_sem sync_sem;
-	struct k_sem notif_sem;
+
+	struct k_work_delayable notif_work;
 };
 
 static void ncm_send_notification(struct usbd_class_data *const c_data);
@@ -618,8 +619,8 @@ static int usbd_cdc_ncm_request(struct usbd_class_data *const c_data,
 	}
 
 	if (bi->ep == cdc_ncm_get_int_in(c_data)) {
-		k_sem_give(&data->notif_sem);
-		ncm_send_notification(c_data);
+		/* FIXME: ncm_send_notification(c_data); */
+		net_buf_unref(buf);
 
 		return 0;
 	}
@@ -638,12 +639,12 @@ static int cdc_ncm_send_notification(const struct device *dev,
 
 	if (!atomic_test_bit(&data->state, CDC_NCM_CLASS_ENABLED)) {
 		LOG_INF("USB configuration is not enabled");
-		return 0;
+		return -EBUSY;
 	}
 
 	if (atomic_test_bit(&data->state, CDC_NCM_CLASS_SUSPENDED)) {
 		LOG_INF("USB device is suspended (FIXME)");
-		return 0;
+		return -EBUSY;
 	}
 
 	ep = cdc_ncm_get_int_in(c_data);
@@ -659,13 +660,9 @@ static int cdc_ncm_send_notification(const struct device *dev,
 	if (ret) {
 		LOG_ERR("Failed to enqueue net_buf for 0x%02x", ep);
 		net_buf_unref(buf);
-		return ret;
 	}
 
-	k_sem_take(&data->notif_sem, K_FOREVER);
-	net_buf_unref(buf);
-
-	return 0;
+	return ret;
 }
 
 static int cdc_ncm_send_connected(const struct device *dev,
@@ -752,6 +749,27 @@ static void ncm_send_notification(struct usbd_class_data *const c_data)
 	}
 }
 
+static void send_notification_work(struct k_work *work)
+{
+	struct k_work_delayable *notif_work = k_work_delayable_from_work(work);
+	struct cdc_ncm_eth_data *data;
+	struct device *dev;
+	int ret;
+
+	data = CONTAINER_OF(notif_work, struct cdc_ncm_eth_data, notif_work);
+	dev = usbd_class_get_private(data->c_data);
+
+	if (atomic_test_bit(&data->state, CDC_NCM_IFACE_UP)) {
+		ret = cdc_ncm_send_connected(dev, true);
+	} else {
+		ret = cdc_ncm_send_connected(dev, false);
+	}
+
+	if (ret) {
+		(void)k_work_reschedule(&data->notif_work, K_MSEC(100));
+	}
+}
+
 static void usbd_cdc_ncm_update(struct usbd_class_data *const c_data,
 				const uint8_t iface, const uint8_t alternate)
 {
@@ -765,16 +783,12 @@ static void usbd_cdc_ncm_update(struct usbd_class_data *const c_data,
 		iface, alternate);
 
 	if (data_iface == iface && alternate == 0) {
-		net_if_carrier_off(data->iface);
-
 		LOG_DBG("Skip iface %u alternate %u", iface, alternate);
 
 		data->tx_seq = 0;
 	}
 
 	if (data_iface == iface && alternate == 1) {
-		net_if_carrier_on(data->iface);
-
 		ret = cdc_ncm_out_start(c_data);
 		if (ret < 0) {
 			LOG_ERR("Failed to start OUT transfer (%d)", ret);
@@ -1085,18 +1099,13 @@ static enum ethernet_hw_caps cdc_ncm_get_capabilities(const struct device *dev)
 static int cdc_ncm_iface_start(const struct device *dev)
 {
 	struct cdc_ncm_eth_data *data = dev->data;
-	int ret;
 
 	LOG_DBG("Start interface %d", net_if_get_by_iface(data->iface));
 
 	atomic_set_bit(&data->state, CDC_NCM_IFACE_UP);
+	net_if_carrier_on(data->iface);
 
-	ret = cdc_ncm_send_connected(dev, true);
-	if (ret < 0) {
-		LOG_DBG("Cannot send connection status (%d)", ret);
-	} else {
-		data->if_state = IF_STATE_CONNECTION_STATUS_SENT;
-	}
+	(void)k_work_reschedule(&data->notif_work, K_MSEC(1));
 
 	return 0;
 }
@@ -1104,16 +1113,13 @@ static int cdc_ncm_iface_start(const struct device *dev)
 static int cdc_ncm_iface_stop(const struct device *dev)
 {
 	struct cdc_ncm_eth_data *data = dev->data;
-	int ret;
 
 	LOG_DBG("Stop interface %d", net_if_get_by_iface(data->iface));
 
-	ret = cdc_ncm_send_connected(dev, false);
-	if (ret < 0) {
-		atomic_clear_bit(&data->state, CDC_NCM_IFACE_UP);
-	}
+	atomic_clear_bit(&data->state, CDC_NCM_IFACE_UP);
+	(void)k_work_reschedule(&data->notif_work, K_MSEC(1));
 
-	return ret;
+	return 0;
 }
 
 static void cdc_ncm_iface_init(struct net_if *const iface)
@@ -1127,7 +1133,7 @@ static void cdc_ncm_iface_init(struct net_if *const iface)
 			     sizeof(data->mac_addr),
 			     NET_LINK_ETHERNET);
 
-	net_if_flag_set(iface, NET_IF_NO_AUTO_START);
+	net_if_flag_set(iface, NET_IF_POINTOPOINT);
 	net_if_carrier_off(iface);
 
 	LOG_DBG("CDC NCM interface initialized");
@@ -1136,6 +1142,8 @@ static void cdc_ncm_iface_init(struct net_if *const iface)
 static int usbd_cdc_ncm_preinit(const struct device *dev)
 {
 	struct cdc_ncm_eth_data *data = dev->data;
+
+	k_work_init_delayable(&data->notif_work, send_notification_work);
 
 	if (sys_get_le48(data->mac_addr) == sys_cpu_to_le48(0)) {
 		gen_random_mac(data->mac_addr, 0, 0, 0);
@@ -1356,7 +1364,6 @@ const static struct usb_desc_header *cdc_ncm_hs_desc_##n[] = {			\
 		.c_data = &cdc_ncm_##n,						\
 		.mac_addr = DT_INST_PROP_OR(n, local_mac_address, {0}),		\
 		.sync_sem = Z_SEM_INITIALIZER(eth_data_##n.sync_sem, 0, 1),	\
-		.notif_sem = Z_SEM_INITIALIZER(eth_data_##n.notif_sem, 0, 1),	\
 		.mac_desc_data = &mac_desc_data_##n,				\
 		.desc = &cdc_ncm_desc_##n,					\
 		.fs_desc = cdc_ncm_fs_desc_##n,					\
