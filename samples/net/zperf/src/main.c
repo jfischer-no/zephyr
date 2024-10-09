@@ -56,6 +56,7 @@ int main(void)
         if (enable_usb_device_next()) {
                 return 0;
         }
+	(void)net_config_init_app(NULL, "Initializing network");
 #endif /* CONFIG_USB_DEVICE_STACK_NEXT */
 
 #ifdef CONFIG_NET_LOOPBACK_SIMULATE_PACKET_DROP
