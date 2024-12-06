@@ -11,6 +11,19 @@ menuconfig UDC_DRIVER
 
 if UDC_DRIVER
 
+config UDC_DRIVER_HAS_HIGH_SPEED_SUPPORT
+	bool
+	help
+	  Driver supports controller type that may have high speed support.
+
+config UDC_DRIVER_SUPPORTS_HIGH_SPEED
+	bool "Driver supports high speed"
+	depends on UDC_DRIVER_HAS_HIGH_SPEED_SUPPORT
+	default y
+	help
+	  Use this option to disable high-speed support or limit the controller
+	  to operate at full speed only.
+
 config UDC_BUF_COUNT
 	int "Number of buffers in the pool"
 	range 16 256
