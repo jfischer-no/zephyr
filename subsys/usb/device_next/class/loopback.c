@@ -126,7 +126,7 @@ static void *lb_get_desc(struct usbd_class_data *const c_data,
 {
 	struct lb_data *data = usbd_class_get_private(c_data);
 
-	if (USBD_SUPPORTS_HIGH_SPEED && speed == USBD_SPEED_HS) {
+	if (usbd_speed_is_hs(speed)) {
 		return data->hs_desc;
 	}
 

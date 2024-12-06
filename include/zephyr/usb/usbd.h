@@ -37,12 +37,6 @@ extern "C" {
  * @{
  */
 
-/* 1 if USB device stack is compiled with High-Speed support */
-#define USBD_SUPPORTS_HIGH_SPEED IS_EQ(CONFIG_USBD_MAX_SPEED, 1)
-
-/* Maximum bulk max packet size the stack supports */
-#define USBD_MAX_BULK_MPS COND_CODE_1(USBD_SUPPORTS_HIGH_SPEED, (512), (64))
-
 /*
  * The USB Unicode bString is encoded in UTF16LE, which means it takes up
  * twice the amount of bytes than the same string encoded in ASCII7.
@@ -976,6 +970,32 @@ enum usbd_speed usbd_bus_speed(const struct usbd_context *const uds_ctx);
  * @return Highest supported speed
  */
 enum usbd_speed usbd_caps_speed(const struct usbd_context *const uds_ctx);
+
+/** Evaluates to 1 if USB device stack is compiled with High-Speed support */
+#define USBD_SUPPORTS_HIGH_SPEED IS_EQ(CONFIG_USBD_MAX_SPEED, 1)
+
+/** Maximum bulk max packet size the stack supports */
+#define USBD_MAX_BULK_MPS COND_CODE_1(USBD_SUPPORTS_HIGH_SPEED, (512), (64))
+
+/**
+ * @brief Shorthand to check if speed argument is high speed
+ *
+ * @param[in] speed Parameter that expands to usbd_speed
+ *
+ * @return 1 if evaluated speed is high speed
+ */
+#define usbd_speed_is_hs(p_speed) \
+	(USBD_SUPPORTS_HIGH_SPEED && p_speed == USBD_SPEED_HS)
+
+/**
+ * @brief Shorthand to check if actual device speed is high speed
+ *
+ * @param[in] ctx Pointer to a device context
+ *
+ * @return 1 if actual device speed is high speed
+ */
+#define usbd_bus_speed_is_hs(p_uds_ctx) \
+	(USBD_SUPPORTS_HIGH_SPEED && usbd_bus_speed(p_uds_ctx) == USBD_SPEED_HS)
 
 /**
  * @brief Set USB device descriptor value bcdUSB

@@ -132,35 +132,22 @@ static int register_classes(const struct shell *sh)
 {
 	int err;
 
-	STRUCT_SECTION_FOREACH_ALTERNATE(usbd_class_fs, usbd_class_node, c_nd) {
-		err = usbd_register_class(my_uds_ctx, c_nd->c_data->name,
-					  USBD_SPEED_FS, 1);
+	if (usbd_speed_is_hs(usbd_caps_speed(my_uds_ctx))) {
+		err = usbd_register_all_classes(my_uds_ctx, USBD_SPEED_HS, 1);
 		if (err) {
 			shell_error(sh,
-				    "dev: failed to register FS %s (%d)",
-				    c_nd->c_data->name, err);
+				    "dev: failed to register available classes to HS (%d)",
+				    err);
 			return err;
 		}
-
-		shell_print(sh, "dev: register FS %s", c_nd->c_data->name);
 	}
 
-	if (!USBD_SUPPORTS_HIGH_SPEED ||
-	    usbd_caps_speed(my_uds_ctx) != USBD_SPEED_HS) {
-		return 0;
-	}
-
-	STRUCT_SECTION_FOREACH_ALTERNATE(usbd_class_hs, usbd_class_node, c_nd) {
-		err = usbd_register_class(my_uds_ctx, c_nd->c_data->name,
-					  USBD_SPEED_HS, 1);
-		if (err) {
-			shell_error(sh,
-				    "dev: failed to register HS %s (%d)",
-				    c_nd->c_data->name, err);
-			return err;
-		}
-
-		shell_print(sh, "dev: register HS %s", c_nd->c_data->name);
+	err = usbd_register_all_classes(my_uds_ctx, USBD_SPEED_FS, 1);
+	if (err) {
+		shell_error(sh,
+			    "dev: failed to register available classes to FS (%d)",
+			    err);
+		return err;
 	}
 
 	return 0;
