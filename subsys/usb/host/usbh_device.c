@@ -9,6 +9,7 @@
 
 #include "usbh_device.h"
 #include "usbh_ch9.h"
+#include "usbh_class_api.h"
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(usbh_dev, CONFIG_USBH_LOG_LEVEL);
@@ -17,6 +18,8 @@ K_MEM_SLAB_DEFINE_STATIC(usb_device_slab, sizeof(struct usb_device),
 			 CONFIG_USBH_USB_DEVICE_MAX, sizeof(void *));
 
 K_HEAP_DEFINE(usb_device_heap, CONFIG_USBH_USB_DEVICE_HEAP);
+
+static int probe_class_driver(struct usb_device *const udev, const bool remove);
 
 struct usb_device *usbh_device_alloc(struct usbh_context *const uhs_ctx)
 {
@@ -39,6 +42,7 @@ void usbh_device_free(struct usb_device *const udev)
 {
 	struct usbh_context *const uhs_ctx = udev->ctx;
 
+	probe_class_driver(udev, true);
 	sys_bitarray_clear_bit(uhs_ctx->addr_ba, udev->addr);
 	sys_dlist_remove(&udev->node);
 	if (udev->cfg_desc != NULL) {
@@ -270,6 +274,41 @@ error:
 	k_mutex_unlock(&udev->mutex);
 
 	return 0;
+}
+
+static int probe_class_driver(struct usb_device *const udev, const bool remove)
+{
+	int ret;
+
+	STRUCT_SECTION_FOREACH(usbh_class_node, c_node) {
+		struct usbh_class_data *const c_data = c_node->c_data;
+		const struct usbh_code_triple *const code = c_data->code;
+
+		for (unsigned int i = 0; i < UHC_INTERFACES_MAX; i++) {
+			struct usb_if_descriptor *if_desc = NULL;
+
+			if (udev->ifaces[i].dhp == NULL) {
+				break;
+			}
+
+			if_desc = (void *)udev->ifaces[i].dhp;
+			if (if_desc->bInterfaceClass == code->dclass &&
+			    if_desc->bInterfaceSubClass == code->sub &&
+			    if_desc->bInterfaceProtocol == code->proto) {
+				if (remove) {
+					ret = usbh_class_removed(c_node->c_data, udev, i);
+				} else {
+					ret = usbh_class_probe(c_node->c_data, udev, i);
+				}
+
+				if (ret == 0) {
+					return 0;
+				}
+			}
+		}
+	}
+
+	return -ENOTSUP;
 }
 
 static int parse_configuration_descriptor(struct usb_device *const udev)
@@ -521,6 +560,11 @@ int usbh_device_init(struct usb_device *const udev)
 	err = usbh_device_set_configuration(udev, 1);
 	if (err) {
 		LOG_ERR("Failed to configure new device with address %u", udev->addr);
+		goto error;
+	}
+
+	if (probe_class_driver(udev, false)) {
+		LOG_WRN("No driver found for device %u", udev->addr);
 	}
 
 error:

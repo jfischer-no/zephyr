@@ -73,34 +73,77 @@ struct usbh_code_triple {
 };
 
 /**
- * @brief USB host class data and class instance API
+ * @brief USB host support class data
  */
 struct usbh_class_data {
+	/** Name of the USB host class instance */
+	const char *name;
+	/** Pointer to USB host stack context structure */
+	struct usbh_context *uhs_ctx;
+	/** Pointer to host support class API */
+	const struct usbh_class_api *api;
 	/** Class code supported by this instance */
-	struct usbh_code_triple code;
-
-	/** Initialization of the class implementation */
-	/* int (*init)(struct usbh_context *const uhs_ctx); */
-	/** Request completion event handler */
-	int (*request)(struct usbh_context *const uhs_ctx,
-			struct uhc_transfer *const xfer, int err);
-	/** Device connected handler  */
-	int (*connected)(struct usbh_context *const uhs_ctx);
-	/** Device removed handler  */
-	int (*removed)(struct usbh_context *const uhs_ctx);
-	/** Bus remote wakeup handler  */
-	int (*rwup)(struct usbh_context *const uhs_ctx);
-	/** Bus suspended handler  */
-	int (*suspended)(struct usbh_context *const uhs_ctx);
-	/** Bus resumed handler  */
-	int (*resumed)(struct usbh_context *const uhs_ctx);
+	const struct usbh_code_triple *code;
+	/** Pointer to private data */
+	void *priv;
 };
 
 /**
+ * @brief USB host class data and class instance API
  */
-#define USBH_DEFINE_CLASS(name) \
-	static STRUCT_SECTION_ITERABLE(usbh_class_data, name)
+struct usbh_class_api {
+	/** Request completion event handler */
+	int (*request)(struct usbh_class_data *const c_data,
+		       struct uhc_transfer *const xfer, int err);
+	/** Bus suspended handler  */
+	void (*suspended)(struct usbh_class_data *const c_data,
+			  struct usb_device *const udev);
+	/** Bus resumed handler  */
+	void (*resumed)(struct usbh_class_data *const c_data,
+			struct usb_device *const udev);
+	/** Host init handler  */
+	int (*probe)(struct usbh_class_data *const c_data,
+		     struct usb_device *const udev,
+		     const uint8_t iface);
+	/** Device removed handler  */
+	int (*removed)(struct usbh_class_data *const c_data,
+		       struct usb_device *const udev,
+		       const uint8_t iface);
+	/** Host init handler  */
+	int (*init)(struct usbh_class_data *const c_data);
+};
 
+/**
+ * @cond INTERNAL_HIDDEN
+ */
+struct usbh_class_node {
+	/** Node information for the slist. */
+	sys_snode_t node;
+	/** Pointer to public class node instance. */
+	struct usbh_class_data *const c_data;
+};
+/** @endcond */
+
+/**
+ * @brief Define USB host support class data
+ *
+ * Macro defines class (function) data, as well as corresponding node
+ * structures used internally by the stack.
+ *
+ * @param class_name   Class name
+ * @param class_api    Pointer to struct usbh_class_api
+ * @param class_priv   Class private data
+ */
+#define USBH_DEFINE_CLASS(class_name, class_api, class_priv, class_code)	\
+	static struct usbh_class_data class_data_##class_name = {		\
+		.name = STRINGIFY(class_name),					\
+		.api = class_api,						\
+		.priv = class_priv,						\
+		.code = class_code,						\
+	};									\
+	static STRUCT_SECTION_ITERABLE(usbh_class_node, class_name) = {		\
+		.c_data = &class_data_##class_name,				\
+	};									\
 
 /**
  * @brief Initialize the USB host support;
