@@ -18,9 +18,11 @@
 #include <zephyr/usb/bos.h>
 #include <zephyr/usb/usb_ch9.h>
 #include <zephyr/usb/usbd_msg.h>
+#include <zephyr/drivers/usb/udc.h>
 #include <zephyr/drivers/usb/udc_buf.h>
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/slist.h>
+#include <zephyr/sys/spsc_lockfree.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/iterable_sections.h>
 
@@ -287,6 +289,10 @@ struct usbd_context {
 	const struct device *dev;
 	/** Notification message recipient callback */
 	usbd_msg_cb_t msg_cb;
+	/** Driver events */
+	struct k_event events;
+	/** Finished transfer requests SPSC */
+	SPSC_DECLARE(usbd_buf_spsc, struct net_buf *) buf_spsc;
 	/** Middle layer runtime data */
 	struct usbd_ch9_data ch9_data;
 	/** slist to manage descriptors like string, BOS */
@@ -515,9 +521,13 @@ static inline void *usbd_class_get_private(const struct usbd_class_data *const c
 				     CONFIG_USBD_THREAD_STACK_SIZE);	\
 	static struct k_thread thread_data_##device_name;		\
 									\
+	static struct net_buf *usbd_req_ptr[CONFIG_USBD_MAX_UDC_MSG];	\
+									\
 	static STRUCT_SECTION_ITERABLE(usbd_context, device_name) = {	\
 		.name = STRINGIFY(device_name),				\
 		.dev = udc_dev,						\
+		.buf_spsc = SPSC_INITIALIZER(CONFIG_USBD_MAX_UDC_MSG,	\
+					     usbd_req_ptr),		\
 		.fs_desc = &fs_desc_##device_name,			\
 		IF_ENABLED(USBD_SUPPORTS_HIGH_SPEED, (			\
 		.hs_desc = &hs_desc_##device_name,			\
