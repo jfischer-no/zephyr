@@ -1,0 +1,28 @@
+# Copyright Nordic Semiconductor ASA
+#
+# SPDX-License-Identifier: Apache-2.0
+
+config USBH_CDC_ACM_CLASS
+	bool "USB host CDC ACM implementation [EXPERIMENTAL]"
+	depends on SERIAL
+	depends on DT_HAS_ZEPHYR_HOST_CDC_ACM_UART_ENABLED
+	select SERIAL_HAS_DRIVER
+	select SERIAL_SUPPORT_ASYNC
+	select UART_ASYNC_API
+	default y
+	help
+	  USB host CDC ACM class implementation.
+
+if USBH_CDC_ACM_CLASS
+
+config USBH_CDC_ACM_STACK_SIZE
+	int "USB host CDC ACM workqueue stack size"
+	default 1024
+	help
+	  USB host CDC ACM workqueue stack size.
+
+module = USBH_CDC_ACM
+module-str = usbh-cdc-acm
+source "subsys/logging/Kconfig.template.log_config"
+
+endif
