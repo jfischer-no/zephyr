@@ -7,6 +7,7 @@
 #include <zephyr/usb/usbd.h>
 #include <zephyr/usb/usbh.h>
 #include <zephyr/logging/log.h>
+#include <sample_usbd.h>
 
 #include "usbh_ch9.h"
 #include "usbh_class.h"
@@ -294,17 +295,8 @@ ZTEST(usbh_test, test_get_next_function)
 	zassert_is_null(desc);
 }
 
-USBD_CONFIGURATION_DEFINE(
-	test_fs_config, USB_SCD_SELF_POWERED | USB_SCD_REMOTE_WAKEUP, 200,
-	NULL);
-USBD_CONFIGURATION_DEFINE(
-	test_hs_config, USB_SCD_SELF_POWERED | USB_SCD_REMOTE_WAKEUP, 200,
-	NULL);
-USBD_DESC_LANG_DEFINE(test_lang);
-USBD_DESC_STRING_DEFINE(test_mfg, "ZEPHYR", 1);
-USBD_DESC_STRING_DEFINE(test_product, "Zephyr USB Test", 2);
-USBD_DESC_STRING_DEFINE(test_sn, "0123456789ABCDEF", 3);
-USBD_DEVICE_DEFINE(test_usbd, DEVICE_DT_GET(DT_NODELABEL(zephyr_udc0)), 0x2fe3, 0xffff);
+static struct usbd_context *test_usbd;
+
 USBH_CONTROLLER_DEFINE(test_uhs_ctx, DEVICE_DT_GET(DT_NODELABEL(zephyr_uhc0)));
 
 struct usbh_context *const uhs_ctx = &test_uhs_ctx;
@@ -330,40 +322,13 @@ void *usbh_test_enable(void)
 
 	LOG_INF("Host controller enabled");
 
-	ret = usbd_add_descriptor(&test_usbd, &test_lang);
-	zassert_ok(ret, "Failed to initialize descriptor (%d)", ret);
+	test_usbd = sample_usbd_setup_device(NULL);
+	zassert_not_null(test_usbd, "Failed to setup USB device");
 
-	ret = usbd_add_descriptor(&test_usbd, &test_mfg);
-	zassert_ok(ret, "Failed to initialize descriptor (%d)", ret);
-
-	ret = usbd_add_descriptor(&test_usbd, &test_product);
-	zassert_ok(ret, "Failed to initialize descriptor (%d)", ret);
-
-	ret = usbd_add_descriptor(&test_usbd, &test_sn);
-	zassert_ok(ret, "Failed to initialize descriptor (%d)", ret);
-
-	ret = usbd_add_configuration(&test_usbd, USBD_SPEED_FS, &test_fs_config);
-	zassert_ok(ret, "Failed to add configuration (%d)", ret);
-
-	if (USBD_SUPPORTS_HIGH_SPEED &&
-	    usbd_caps_speed(&test_usbd) == USBD_SPEED_HS) {
-		ret = usbd_add_configuration(&test_usbd, USBD_SPEED_HS, &test_hs_config);
-		zassert_ok(ret, "Failed to add configuration (%d)", ret);
-	}
-
-	ret = usbd_register_class(&test_usbd, "loopback_0", USBD_SPEED_FS, 1);
-	zassert_ok(ret, "Failed to register all instances (%d)", ret);
-
-	if (USBD_SUPPORTS_HIGH_SPEED &&
-	    usbd_caps_speed(&test_usbd) == USBD_SPEED_HS) {
-		ret = usbd_register_all_classes(&test_usbd, USBD_SPEED_HS, 1, NULL);
-		zassert_ok(ret, "Failed to unregister all instances (%d)", ret);
-	}
-
-	ret = usbd_init(&test_usbd);
+	ret = usbd_init(test_usbd);
 	zassert_ok(ret, "Failed to initialize device support");
 
-	ret = usbd_enable(&test_usbd);
+	ret = usbd_enable(test_usbd);
 	zassert_ok(ret, "Failed to enable device support");
 
 	LOG_INF("Device support enabled");
@@ -378,10 +343,10 @@ void usbh_test_shutdown(void *f)
 {
 	int ret;
 
-	ret = usbd_disable(&test_usbd);
-	zassert_ok(ret, "Failed to enable device support");
+	ret = usbd_disable(test_usbd);
+	zassert_ok(ret, "Failed to disable device support");
 
-	ret = usbd_shutdown(&test_usbd);
+	ret = usbd_shutdown(test_usbd);
 	zassert_ok(ret, "Failed to shutdown device support");
 
 	LOG_INF("Device support disabled");
