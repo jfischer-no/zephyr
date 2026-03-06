@@ -2824,6 +2824,8 @@ Espressif Platforms:
     - wmrsouza
   files:
     - drivers/*/*esp32*.c
+    - drivers/*/*esp32*.h
+    - drivers/*/*/*esp32*.h
     - boards/espressif/
     - soc/espressif/
     - dts/*/espressif/
@@ -6910,6 +6912,7 @@ nRF Platforms:
   files:
     - boards/nordic/
     - drivers/*/*nrf*.c
+    - drivers/*/*/*nrf*.h
     - drivers/*/*nrf*/
     - drivers/*/*nordic*/
     - soc/nordic/
