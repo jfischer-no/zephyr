@@ -79,7 +79,7 @@ static void print_desc_bcd(const struct shell *sh, int indent,
 }
 
 static void print_dev_desc_indent(const struct shell *sh, const int indent,
-			   const struct usb_device_descriptor *const desc)
+				  const struct usb_device_descriptor *const desc)
 {
 	uint8_t dindent = indent + 2; /* Data has a small indent */
 
@@ -101,70 +101,70 @@ static void print_dev_desc_indent(const struct shell *sh, const int indent,
 }
 
 static void print_cfg_desc_indent(const struct shell *sh, const int indent,
-			   const struct usb_cfg_descriptor *const cfg)
+				  const struct usb_cfg_descriptor *const desc)
 {
 	uint8_t dindent = indent + 2; /* Data has a small indent */
 
 	shell_print(sh, "%*sConfiguration Descriptor:", indent, "");
-	print_desc_u(sh, dindent, "bLength", cfg->bLength, NULL);
-	print_desc_u(sh, dindent, "bDescriptorType", cfg->bDescriptorType, NULL);
-	print_desc_x16(sh, dindent, "wTotalLength", cfg->wTotalLength, NULL);
-	print_desc_u(sh, dindent, "bNumInterfaces", cfg->bNumInterfaces, NULL);
-	print_desc_u(sh, dindent, "bConfigurationValue", cfg->bConfigurationValue, NULL);
-	print_desc_u(sh, dindent, "iConfiguration", cfg->iConfiguration, NULL);
-	print_desc_x8(sh, dindent, "bmAttributes", cfg->bmAttributes, NULL);
-	print_desc_u(sh, dindent, "bMaxPower", cfg->bMaxPower * 2, "mA");
+	print_desc_u(sh, dindent, "bLength", desc->bLength, NULL);
+	print_desc_u(sh, dindent, "bDescriptorType", desc->bDescriptorType, NULL);
+	print_desc_x16(sh, dindent, "wTotalLength", desc->wTotalLength, NULL);
+	print_desc_u(sh, dindent, "bNumInterfaces", desc->bNumInterfaces, NULL);
+	print_desc_u(sh, dindent, "bConfigurationValue", desc->bConfigurationValue, NULL);
+	print_desc_u(sh, dindent, "iConfiguration", desc->iConfiguration, NULL);
+	print_desc_x8(sh, dindent, "bmAttributes", desc->bmAttributes, NULL);
+	print_desc_u(sh, dindent, "bMaxPower", desc->bMaxPower * 2, "mA");
 }
 
 static void print_iface_desc_indent(const struct shell *sh, const int indent,
-				const struct usb_if_descriptor *iface)
+				    const struct usb_if_descriptor *const desc)
 {
 	uint8_t dindent = indent + 2; /* Data has a small indent */
 
 	shell_print(sh, "%*sInterface Descriptor:", indent, "");
-	print_desc_u(sh, dindent, "bLength", iface->bLength, NULL);
-	print_desc_u(sh, dindent, "bDescriptorType", iface->bDescriptorType, NULL);
-	print_desc_u(sh, dindent, "bInterfaceNumber", iface->bInterfaceNumber, NULL);
-	print_desc_u(sh, dindent, "bAlternateSetting", iface->bAlternateSetting, NULL);
-	print_desc_u(sh, dindent, "bNumEndpoints", iface->bNumEndpoints, NULL);
-	print_desc_u(sh, dindent, "bInterfaceClass", iface->bInterfaceClass, NULL);
-	print_desc_u(sh, dindent, "bInterfaceSubClass", iface->bInterfaceSubClass, NULL);
-	print_desc_u(sh, dindent, "bInterfaceProtocol", iface->bInterfaceProtocol, NULL);
-	print_desc_u(sh, dindent, "iInterface", iface->iInterface, NULL);
+	print_desc_u(sh, dindent, "bLength", desc->bLength, NULL);
+	print_desc_u(sh, dindent, "bDescriptorType", desc->bDescriptorType, NULL);
+	print_desc_u(sh, dindent, "bInterfaceNumber", desc->bInterfaceNumber, NULL);
+	print_desc_u(sh, dindent, "bAlternateSetting", desc->bAlternateSetting, NULL);
+	print_desc_u(sh, dindent, "bNumEndpoints", desc->bNumEndpoints, NULL);
+	print_desc_u(sh, dindent, "bInterfaceClass", desc->bInterfaceClass, NULL);
+	print_desc_u(sh, dindent, "bInterfaceSubClass", desc->bInterfaceSubClass, NULL);
+	print_desc_u(sh, dindent, "bInterfaceProtocol", desc->bInterfaceProtocol, NULL);
+	print_desc_u(sh, dindent, "iInterface", desc->iInterface, NULL);
 }
 
 static void print_assoc_desc_indent(const struct shell *sh, const int indent,
-				const struct usb_association_descriptor *iface_assoc)
+				    const struct usb_association_descriptor *const desc)
 {
 	uint8_t dindent = indent + 2; /* Data has a small indent */
 
 	shell_print(sh, "%*sInterface Association:", indent, "");
-	print_desc_u(sh, dindent, "bLength", iface_assoc->bLength, NULL);
-	print_desc_u(sh, dindent, "bDescriptorType", iface_assoc->bDescriptorType, NULL);
-	print_desc_u(sh, dindent, "bFirstInterface", iface_assoc->bFirstInterface, NULL);
-	print_desc_u(sh, dindent, "bInterfaceCount", iface_assoc->bInterfaceCount, NULL);
-	print_desc_u(sh, dindent, "bFunctionClass", iface_assoc->bFunctionClass, NULL);
-	print_desc_u(sh, dindent, "bFunctionSubClass", iface_assoc->bFunctionSubClass, NULL);
-	print_desc_u(sh, dindent, "bFunctionProtocol", iface_assoc->bFunctionProtocol, NULL);
-	print_desc_u(sh, dindent, "iFunction", iface_assoc->iFunction, NULL);
+	print_desc_u(sh, dindent, "bLength", desc->bLength, NULL);
+	print_desc_u(sh, dindent, "bDescriptorType", desc->bDescriptorType, NULL);
+	print_desc_u(sh, dindent, "bFirstInterface", desc->bFirstInterface, NULL);
+	print_desc_u(sh, dindent, "bInterfaceCount", desc->bInterfaceCount, NULL);
+	print_desc_u(sh, dindent, "bFunctionClass", desc->bFunctionClass, NULL);
+	print_desc_u(sh, dindent, "bFunctionSubClass", desc->bFunctionSubClass, NULL);
+	print_desc_u(sh, dindent, "bFunctionProtocol", desc->bFunctionProtocol, NULL);
+	print_desc_u(sh, dindent, "iFunction", desc->iFunction, NULL);
 }
 
 static void print_ep_desc_indent(const struct shell *sh, const int indent,
-				const struct usb_ep_descriptor *ep_desc)
+				 const struct usb_ep_descriptor *const desc)
 {
 	uint8_t dindent = indent + 2; /* Data has a small indent */
 
 	shell_print(sh, "%*sEndpoint Descriptor:", indent, "");
-	print_desc_u(sh, dindent, "bLength", ep_desc->bLength, NULL);
-	print_desc_u(sh, dindent, "bDescriptorType", ep_desc->bDescriptorType, NULL);
-	print_desc_x8(sh, dindent, "bEndpointAddress", ep_desc->bEndpointAddress, NULL);
-	print_desc_x8(sh, dindent, "bmAttributes", ep_desc->bmAttributes, NULL);
-	print_desc_u(sh, dindent, "wMaxPacketSize", ep_desc->wMaxPacketSize, NULL);
-	print_desc_u(sh, dindent, "bInterval", ep_desc->bInterval, NULL);
+	print_desc_u(sh, dindent, "bLength", desc->bLength, NULL);
+	print_desc_u(sh, dindent, "bDescriptorType", desc->bDescriptorType, NULL);
+	print_desc_x8(sh, dindent, "bEndpointAddress", desc->bEndpointAddress, NULL);
+	print_desc_x8(sh, dindent, "bmAttributes", desc->bmAttributes, NULL);
+	print_desc_u(sh, dindent, "wMaxPacketSize", desc->wMaxPacketSize, NULL);
+	print_desc_u(sh, dindent, "bInterval", desc->bInterval, NULL);
 }
 
 static void print_unhandled_desc_indent(const struct shell *sh, const int indent,
-				const struct usb_desc_header *dhp)
+					const struct usb_desc_header *const dhp)
 {
 	uint8_t dindent = indent + 2; /* Data has a small indent */
 
@@ -173,23 +173,25 @@ static void print_unhandled_desc_indent(const struct shell *sh, const int indent
 	print_desc_u(sh, dindent, "bDescriptorType", dhp->bDescriptorType, NULL);
 }
 
-static void print_desc(const struct shell *sh, const struct usb_desc_header *dhp)
+static void print_desc(const struct shell *sh, const void *const desc)
 {
+	const struct usb_desc_header *const dhp = desc;
+
 	switch (dhp->bDescriptorType) {
 	case USB_DESC_CONFIGURATION:
-		print_cfg_desc_indent(sh, 2, (const struct usb_cfg_descriptor *) dhp);
+		print_cfg_desc_indent(sh, 2, desc);
 		break;
 	case USB_DESC_INTERFACE:
-		print_iface_desc_indent(sh, 4, (const struct usb_if_descriptor *) dhp);
+		print_iface_desc_indent(sh, 4, desc);
 		break;
 	case USB_DESC_ENDPOINT:
-		print_ep_desc_indent(sh, 6, (const struct usb_ep_descriptor *) dhp);
+		print_ep_desc_indent(sh, 6, desc);
 		break;
 	case USB_DESC_INTERFACE_ASSOC:
-		print_assoc_desc_indent(sh, 4, (const struct usb_association_descriptor *) dhp);
+		print_assoc_desc_indent(sh, 4, desc);
 		break;
 	default:
-		print_unhandled_desc_indent(sh, 4, dhp);
+		print_unhandled_desc_indent(sh, 4, desc);
 	}
 }
 
@@ -720,7 +722,7 @@ static int cmd_device_list(const struct shell *sh,
 }
 
 static int cmd_device_list_dd(const struct shell *sh,
-			   size_t argc, char **argv)
+			      size_t argc, char **argv)
 {
 	struct usb_device *udev;
 	const struct usb_desc_header *dhp;
@@ -736,8 +738,7 @@ static int cmd_device_list_dd(const struct shell *sh,
 	/* Print device descriptor */
 	print_dev_desc_indent(sh, 0, &udev->dev_desc);
 
-	dhp = (struct usb_desc_header *)udev->cfg_desc;
-
+	dhp = udev->cfg_desc;
 	while (dhp != NULL) {
 		/* Print every entry */
 		print_desc(sh, dhp);
