@@ -136,22 +136,6 @@ struct cdc_acm_uart_data {
 
 static void cdc_acm_irq_rx_enable(const struct device *dev);
 
-static struct net_buf *cdc_acm_rx_buf_alloc(struct net_buf_pool *pool, const uint8_t ep)
-{
-	struct net_buf *buf = NULL;
-	struct udc_buf_info *bi;
-
-	buf = net_buf_alloc(pool, K_NO_WAIT);
-	if (!buf) {
-		return NULL;
-	}
-
-	bi = udc_get_buf_info(buf);
-	bi->ep = ep;
-
-	return buf;
-}
-
 #if CONFIG_USBD_CDC_ACM_BUF_POOL
 UDC_BUF_POOL_DEFINE(cdc_acm_ep_pool,
 		    DT_NUM_INST_STATUS_OKAY(DT_DRV_COMPAT) * 2,
@@ -301,11 +285,11 @@ static size_t cdc_acm_get_bulk_mps(struct usbd_class_data *const c_data)
 static int usbd_cdc_acm_request(struct usbd_class_data *const c_data,
 				struct net_buf *buf, int err)
 {
-	int ret = 0;
 	struct usbd_context *uds_ctx = usbd_class_get_ctx(c_data);
 	const struct device *dev = usbd_class_get_private(c_data);
 	struct cdc_acm_uart_data *data = dev->data;
 	struct udc_buf_info *bi;
+	int ret = 0;
 
 	bi = udc_get_buf_info(buf);
 	if (err) {
@@ -332,6 +316,13 @@ static int usbd_cdc_acm_request(struct usbd_class_data *const c_data,
 		/* RX transfer completion */
 
 		LOG_HEXDUMP_INF(buf->data, buf->len, "");
+		if (buf->len == 0) {
+			/* Drop transfer with zero length */
+			net_buf_unref(buf);
+			cdc_acm_work_submit(&data->rx_fifo_work);
+			goto ep_buf_already_handled;
+		}
+
 		k_fifo_put(data->rx_fifo.bufs, buf);
 		if (data->cb) {
 			cdc_acm_work_submit(&data->irq_cb_work);
@@ -663,7 +654,7 @@ static __maybe_unused int cdc_acm_send_notification(const struct device *dev,
 /*
  * TX handler is triggered when the state of TX fifo has been altered.
  */
-static void cdc_acm_tx_uart_fifo_handler(struct k_work *work)
+static void cdc_acm_tx_fifo_handler(struct k_work *work)
 {
 	struct k_work_delayable *dwork = k_work_delayable_from_work(work);
 	struct cdc_acm_uart_data *data;
@@ -732,8 +723,6 @@ static void cdc_acm_rx_fifo_handler(struct k_work *work)
 	struct cdc_acm_uart_data *data;
 	const struct cdc_acm_uart_config *cfg;
 	struct usbd_class_data *c_data;
-	struct net_buf *buf;
-	int ret;
 
 	data = CONTAINER_OF(work, struct cdc_acm_uart_data, rx_fifo_work);
 	cfg = data->dev->config;
@@ -745,16 +734,24 @@ static void cdc_acm_rx_fifo_handler(struct k_work *work)
 		return;
 	}
 
-	while (buf = cdc_acm_rx_buf_alloc(data->rx_fifo.pool, cdc_acm_get_bulk_out(c_data)),
-	       buf != NULL) {
+	while (true) {
+		struct udc_buf_info *bi;
+		struct net_buf *buf;
+
+		buf = net_buf_alloc(data->rx_fifo.pool, K_NO_WAIT);
+		if (buf == NULL) {
+			break;
+		}
+
 		/* Shrink the buffer size if operating on a full speed bus */
 		buf->size = MIN(cdc_acm_get_bulk_mps(c_data), buf->size);
 
-		ret = usbd_ep_enqueue(c_data, buf);
-		if (ret) {
-			LOG_ERR("Failed to enqueue net_buf for 0x%02x",
-				cdc_acm_get_bulk_out(c_data));
+		bi = udc_get_buf_info(buf);
+		bi->ep = cdc_acm_get_bulk_out(c_data);
+		if (usbd_ep_enqueue(c_data, buf) != 0) {
+			LOG_ERR("Failed to enqueue net_buf for 0x%02x", bi->ep);
 			net_buf_unref(buf);
+			break;
 		}
 	}
 }
@@ -832,11 +829,9 @@ static int cdc_acm_fifo_read(const struct device *dev,
 			     const int size)
 {
 	struct cdc_acm_uart_data *const data = dev->data;
-	const struct udc_buf_info *bi;
-	const struct usbd_class_data *c_data;
 	struct net_buf_simple tmp;
 	struct net_buf *head;
-	uint32_t len = 0;
+	uint32_t len;
 
 	net_buf_simple_init_with_data(&tmp, rx_data, size);
 	tmp.len = 0;
@@ -849,19 +844,22 @@ static int cdc_acm_fifo_read(const struct device *dev,
 		return 0;
 	}
 
-	while (head = k_fifo_peek_head(data->rx_fifo.bufs),
-	       head != NULL && tmp.len < tmp.size) {
+	while (true) {
+		head = k_fifo_peek_head(data->rx_fifo.bufs);
+		if (head == NULL || net_buf_simple_tailroom(&tmp) == 0) {
+			break;
+		}
+
 		len = MIN(net_buf_simple_tailroom(&tmp), head->len);
 		net_buf_simple_add_mem(&tmp, net_buf_pull_mem(head, len), len);
 
 		if (head->len == 0) {
-			k_fifo_get(data->rx_fifo.bufs, K_NO_WAIT);
-			bi = udc_get_buf_info(head);
-			c_data = bi->owner;
-			usbd_ep_buf_free(usbd_class_get_ctx(c_data), head);
+			head = k_fifo_get(data->rx_fifo.bufs, K_NO_WAIT);
+			net_buf_unref(head);
 			data->rx_fifo.altered = true;
 		}
 	}
+
 	return tmp.len;
 }
 
@@ -1017,8 +1015,6 @@ static void cdc_acm_irq_callback_set(const struct device *dev,
 static int cdc_acm_poll_in(const struct device *dev, unsigned char *const c)
 {
 	struct cdc_acm_uart_data *const data = dev->data;
-	struct udc_buf_info *bi;
-	struct usbd_class_data const *c_data;
 	struct net_buf *head;
 
 	head = k_fifo_peek_head(data->rx_fifo.bufs);
@@ -1029,10 +1025,8 @@ static int cdc_acm_poll_in(const struct device *dev, unsigned char *const c)
 	*c = net_buf_pull_u8(head);
 
 	if (head->len == 0) {
-		k_fifo_get(data->rx_fifo.bufs, K_NO_WAIT);
-		bi = udc_get_buf_info(head);
-		c_data = bi->owner;
-		usbd_ep_buf_free(usbd_class_get_ctx(c_data), head);
+		head = k_fifo_get(data->rx_fifo.bufs, K_NO_WAIT);
+		net_buf_unref(head);
 		cdc_acm_work_submit(&data->rx_fifo_work);
 	}
 
@@ -1174,7 +1168,7 @@ static int usbd_cdc_acm_preinit(const struct device *dev)
 
 	ring_buf_reset(data->tx_fifo.rb);
 
-	k_work_init_delayable(&data->tx_fifo_work, cdc_acm_tx_uart_fifo_handler);
+	k_work_init_delayable(&data->tx_fifo_work, cdc_acm_tx_fifo_handler);
 	k_work_init(&data->rx_fifo_work, cdc_acm_rx_fifo_handler);
 	k_work_init(&data->irq_cb_work, cdc_acm_irq_cb_handler);
 
@@ -1407,8 +1401,7 @@ const static struct usb_desc_header *cdc_acm_hs_desc_##n[] = {			\
 										\
 	RING_BUF_DECLARE(cdc_acm_rb_tx_##n, DT_INST_PROP(n, tx_fifo_size));	\
 	UDC_BUF_POOL_DEFINE(cdc_acm_rx_pool_##n,				\
-			    CDC_ACM_RX_BUF_COUNT(n),				\
-			    CDC_ACM_RX_BUF_COUNT(n) * USBD_MAX_BULK_MPS,	\
+			    CDC_ACM_RX_BUF_COUNT(n), USBD_MAX_BULK_MPS,		\
 			    sizeof(struct udc_buf_info), NULL);			\
 										\
 	static const struct cdc_acm_uart_config uart_config_##n = {		\
